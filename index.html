@@ -929,8 +929,8 @@
           <div class="gesture-item">
             <div class="gesture-icon">⭕</div>
             <div>
-              <div class="gesture-name">2. なげなわ消去（ペンボタン検知）</div>
-              <div class="gesture-desc">Sペンのサイドボタン（またはApple Pencil Proのスクイーズ / ツールバーの消しゴム）を使って線で囲むと、囲まれたストロークを一括削除します。</div>
+              <div class="gesture-name">2. なげなわ消去（長押し）</div>
+              <div class="gesture-desc">Sペン・Apple Pencil・マウスなどの描画入力を約0.6秒長押しするか、ツールバーの消しゴムを使って線で囲むと、囲まれたストロークを一括削除します。図形として認識できる線は図形補正が優先されます。</div>
             </div>
           </div>
 
@@ -2600,14 +2600,15 @@
         function resetHoldTimer() {
           if (state.holdTimer) clearTimeout(state.holdTimer);
           state.holdTimer = setTimeout(() => {
-            triggerQuickShape();
+            state.holdTimer = null;
+            if (!triggerQuickShape()) activateLongPressEraser();
           }, 600);
         }
 
         function triggerQuickShape() {
-          if (state.currentMode !== 'pen_draw' || state.currentPenPoints.length < 15) return;
+          if (state.currentMode !== 'pen_draw' || state.currentPenPoints.length < 15) return false;
           const shape = recognizeShape(state.currentPenPoints);
-          if (!shape) return;
+          if (!shape) return false;
           
           state.currentMode = 'quick_shape_adjust';
           state.quickShapeBase = shape;
@@ -2620,6 +2621,32 @@
           renderOverlay();
           showToast('図形補正（そのままドラッグで調整）', '✨');
           modeStatusText.textContent = '図形補正中';
+          return true;
+        }
+
+        function activateLongPressEraser(point = null) {
+          if (state.currentMode !== 'pen_draw') return false;
+          const anchor = point || state.currentPenPoints[state.currentPenPoints.length - 1];
+          if (!anchor) return false;
+          if (state.holdTimer) {
+            clearTimeout(state.holdTimer);
+            state.holdTimer = null;
+          }
+          state.holdAnchor = null;
+          state.currentMode = 'lasso_erase';
+          state.currentPenPoints = [{
+            x: anchor.x,
+            y: anchor.y,
+            pressure: anchor.pressure || 0.5,
+            time: performance.now()
+          }];
+          modeStatusText.textContent = '長押し消しゴム中';
+          penSignalBadge.hidden = false;
+          penSignalBadge.textContent = '長押し：囲んで消去';
+          penSignalBadge.style.background = 'rgba(185, 28, 28, .94)';
+          redrawInkCanvas();
+          renderOverlay();
+          return true;
         }
 
         function rejectPendingAndroidTouches() {
@@ -2783,30 +2810,14 @@
               return;
             }
 
-            if (state.currentMode !== 'pen_draw') {
-              e.preventDefault();
-              return;
-            }
-            if (state.holdTimer) {
-              clearTimeout(state.holdTimer);
-              state.holdTimer = null;
-            }
             const rect = inkCanvas.getBoundingClientRect();
             const point = toWorld(e.clientX - rect.left, e.clientY - rect.top);
-            state.holdAnchor = null;
-            state.currentMode = 'lasso_erase';
-            state.currentPenPoints = [{
+            activateLongPressEraser({
               x: point.x,
               y: point.y,
               pressure: e.pressure || 0.5,
               time: performance.now()
-            }];
-            modeStatusText.textContent = '長押し消しゴム中';
-            penSignalBadge.hidden = false;
-            penSignalBadge.textContent = 'Sペン長押し：囲んで消去';
-            penSignalBadge.style.background = 'rgba(185, 28, 28, .94)';
-            redrawInkCanvas();
-            renderOverlay();
+            });
           }
           e.preventDefault();
         });
@@ -3046,6 +3057,8 @@
           } else {
             state.currentMode = 'pen_draw';
             modeStatusText.textContent = 'ペン描画中';
+            state.holdAnchor = { screenX, screenY };
+            resetHoldTimer();
           }
           renderOverlay();
         }
@@ -3312,21 +3325,8 @@
               renderOverlay();
             }
 
-            const scratchResult = detectScratchGesture(pts);
-            if (scratchResult && scratchResult.isScratch) {
-              const hitStrokeIds = findStrokesIntersectingScratch(scratchResult.recentPoints, scratchResult.bbox);
-              if (hitStrokeIds.size > 0) {
-                const deletedStrokes = state.strokes.filter(s => hitStrokeIds.has(s.id));
-                state.strokes = state.strokes.filter(s => !hitStrokeIds.has(s.id));
-                executeAction({ type: 'delete_strokes', strokes: deletedStrokes });
-                state.currentPenPoints = [];
-                state.currentMode = 'idle';
-                modeStatusText.textContent = 'スクラッチ消去発動！';
-                showToast(`⚡ スクラッチ消去: ${deletedStrokes.length}本のストロークを削除しました`, '⚡');
-                redrawInkCanvas();
-                renderOverlay();
-              }
-            }
+            // スクラッチ消去はpointerupで確定する。描画途中で削除すると、
+            // 四角形の角や手ぶれを往復動作と誤認して復元不能になるため。
           }
         }
 
@@ -3461,7 +3461,8 @@
           else if (mode === 'pen_draw') {
             if (pts.length > 1) {
               const scratchResult = detectScratchGesture(pts);
-              if (scratchResult && scratchResult.isScratch) {
+              const recognizedShape = recognizeShape(pts);
+              if (scratchResult && scratchResult.isScratch && !recognizedShape) {
                 const hitStrokeIds = findStrokesIntersectingScratch(scratchResult.recentPoints, scratchResult.bbox);
                 if (hitStrokeIds.size > 0) {
                   const deletedStrokes = state.strokes.filter(s => hitStrokeIds.has(s.id));
