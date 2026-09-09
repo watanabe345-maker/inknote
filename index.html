@@ -894,7 +894,7 @@
         </div>
       </div>
 
-      <div id="penSignalBadge" role="status" aria-live="polite">入力診断 v5：端末判定中</div>
+      <div id="penSignalBadge" role="status" aria-live="polite">入力診断 v6：端末判定中</div>
 
       <!-- 2本指シミュレーター（マウスや単一ポインタ環境でテスト用） -->
       <button id="twoFingerSimToggle" title="PCマウスで「2本指タップ＋囲み選択」や「スワイプ」をテスト">
@@ -1160,7 +1160,7 @@
         const ANDROID_PALM_CONTACT_SIZE = 36;
         const ANDROID_TOUCH_INTENT_DELAY_MS = 160;
         const ANDROID_MIN_TWO_FINGER_SPREAD = 150;
-        penSignalBadge.textContent = `入力診断 v5：パーム保護 ${USE_STRICT_PALM_GUARD ? 'ON' : 'OFF'}`;
+        penSignalBadge.textContent = `入力診断 v6：パーム保護 ${USE_STRICT_PALM_GUARD ? 'ON' : 'OFF'}`;
         let saveTimer = null;
         let storageWarningShown = false;
         const deletedNotebookIds = new Set();
@@ -2621,6 +2621,9 @@
           renderOverlay();
           showToast('図形補正（そのままドラッグで調整）', '✨');
           modeStatusText.textContent = '図形補正中';
+          penSignalBadge.hidden = false;
+          penSignalBadge.textContent = `図形補正: ${shape.type}`;
+          penSignalBadge.style.background = 'rgba(3, 105, 161, .94)';
           return true;
         }
 
@@ -2787,38 +2790,9 @@
           }
         }, { passive: true });
 
-        // Z Fold 6では通常のSペン長押しがcontextmenuとして通知される。
-        // 図形として認識できる描画はQuickShapeを優先し、それ以外の場合だけ
-        // 現在の描画を破棄してなげなわ消しゴムへ切り替える。
+        // 長押し判定はアプリ内のholdTimerへ一本化する。contextmenuでも
+        // モードを変更すると、QuickShapeの確定と競合するため抑止だけを行う。
         window.addEventListener('contextmenu', (e) => {
-          if ((e.pointerType === 'pen' || e.button === 2) && state.activePenId !== null) {
-            if (state.currentMode === 'quick_shape_adjust') {
-              e.preventDefault();
-              return;
-            }
-
-            const hasRecognizableShape = state.currentMode === 'pen_draw' &&
-              state.currentPenPoints.length >= 15 &&
-              recognizeShape(state.currentPenPoints);
-            if (hasRecognizableShape) {
-              if (state.holdTimer) {
-                clearTimeout(state.holdTimer);
-                state.holdTimer = null;
-              }
-              triggerQuickShape();
-              e.preventDefault();
-              return;
-            }
-
-            const rect = inkCanvas.getBoundingClientRect();
-            const point = toWorld(e.clientX - rect.left, e.clientY - rect.top);
-            activateLongPressEraser({
-              x: point.x,
-              y: point.y,
-              pressure: e.pressure || 0.5,
-              time: performance.now()
-            });
-          }
           e.preventDefault();
         });
         document.addEventListener('gesturestart', (e) => e.preventDefault());
@@ -3450,11 +3424,15 @@
                 color: state.color,
                 width: state.baseWidth,
                 penType: state.penType,
+                shapeType: state.quickShapeBase.type,
                 bbox: calculateBBox(pts)
               };
               state.strokes.push(newStroke);
               executeAction({ type: 'add_stroke', stroke: newStroke });
               showToast('図形を確定しました', '✨');
+              penSignalBadge.hidden = false;
+              penSignalBadge.textContent = `図形保存: ${state.quickShapeBase.type}`;
+              penSignalBadge.style.background = 'rgba(21, 128, 61, .94)';
             }
             modeStatusText.textContent = '待機中';
           }
