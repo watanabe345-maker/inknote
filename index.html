@@ -1092,9 +1092,11 @@
         // --- Phase 2: ライブラリ、ページ、3D画面遷移 ---
         const STORAGE_KEY = 'inknote_phase2_library_v1';
         const COVER_COLORS = ['#315f72', '#865146', '#566a45', '#6a557d', '#9a733c', '#394b68'];
-        const PALM_CONTACT_SIZE = 45;
-        const STYLUS_TOUCH_GRACE_MS = 650;
-        const INTENTIONAL_TWO_FINGER_HOLD_MS = 140;
+        // iPadOS は通常の指でも大きな接触幅を返すことがあるため、
+        // width / height ではパーム判定しない。ペン接触中と直後のごく短い
+        // タッチだけを除外し、通常のパン・ピンチ操作を妨げないようにする。
+        const STYLUS_TOUCH_GRACE_MS = 90;
+        const INTENTIONAL_TWO_FINGER_HOLD_MS = 90;
         let saveTimer = null;
         let storageWarningShown = false;
         const deletedNotebookIds = new Set();
@@ -2608,20 +2610,18 @@
           const eventTime = performance.now();
 
           if (e.pointerType === 'touch') {
-            const contactSize = Math.max(Number(e.width) || 0, Number(e.height) || 0);
             const stylusIsActive = state.activePenId !== null;
             const stylusWasJustUsed = eventTime - state.lastStylusTime < STYLUS_TOUCH_GRACE_MS;
-            if (stylusIsActive || stylusWasJustUsed || contactSize >= PALM_CONTACT_SIZE) {
+            if (stylusIsActive || stylusWasJustUsed) {
               state.rejectedTouchIds.add(e.pointerId);
               return;
             }
           } else if (e.pointerType === 'pen') {
             state.lastStylusTime = eventTime;
             const trackedTouches = Array.from(state.activeTouches.values());
-            const intentionalTwoFingerHold = trackedTouches.length >= 2 &&
+            const intentionalTwoFingerHold = trackedTouches.length === 2 &&
               trackedTouches.every(touch =>
-                eventTime - touch.startTime >= INTENTIONAL_TWO_FINGER_HOLD_MS &&
-                Math.max(touch.width || 0, touch.height || 0) < PALM_CONTACT_SIZE
+                eventTime - touch.startTime >= INTENTIONAL_TWO_FINGER_HOLD_MS
               );
             if (trackedTouches.length && !intentionalTwoFingerHold) {
               trackedTouches.forEach(touch => state.rejectedTouchIds.add(touch.id));
