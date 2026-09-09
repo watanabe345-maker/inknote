@@ -1003,6 +1003,7 @@
           lastReportedPenButtons: null,
           stylusInProximity: false,
           lastStylusHoverTime: -Infinity,
+          androidTouchIntentTimer: null,
           currentPenPoints: [], // { x, y, pressure, time }
           currentMode: 'idle', // 'idle' | 'pen_draw' | 'lasso_erase' | 'lasso_select' | 'two_finger_swipe' | 'dragging_selection'
           // 既存コアの state.strokes 等は、現在ページへの透過的なアクセサとして維持する
@@ -1149,6 +1150,8 @@
         const IS_ANDROID = /Android/i.test(navigator.userAgent);
         const ANDROID_STYLUS_PROXIMITY_MS = 1800;
         const ANDROID_PALM_CONTACT_SIZE = 42;
+        const ANDROID_TOUCH_INTENT_DELAY_MS = 170;
+        const ANDROID_PALM_CLUSTER_SPREAD = 72;
         let saveTimer = null;
         let storageWarningShown = false;
         const deletedNotebookIds = new Set();
@@ -2607,6 +2610,73 @@
           modeStatusText.textContent = '図形補正中';
         }
 
+        function rejectPendingAndroidTouches() {
+          if (state.androidTouchIntentTimer) {
+            clearTimeout(state.androidTouchIntentTimer);
+            state.androidTouchIntentTimer = null;
+          }
+          state.activeTouches.forEach(touch => state.rejectedTouchIds.add(touch.id));
+          state.activeTouches.clear();
+          state.initialPinchDist = null;
+          state.initialCamera = null;
+          state.twoFingerStartCenter = null;
+          touchCountText.textContent = '0本';
+          if (state.currentMode === 'panning' || state.currentMode === 'zooming') {
+            state.currentMode = 'idle';
+            modeStatusText.textContent = '待機中';
+          }
+        }
+
+        function activatePendingAndroidTouches() {
+          state.androidTouchIntentTimer = null;
+          const touches = Array.from(state.activeTouches.values());
+          if (!touches.length || state.activePenId !== null || state.stylusInProximity) {
+            rejectPendingAndroidTouches();
+            return;
+          }
+
+          const spread = touches.length >= 2
+            ? Math.hypot(
+                touches[0].screenX - touches[1].screenX,
+                touches[0].screenY - touches[1].screenY
+              )
+            : Infinity;
+          const looksLikePalmCluster = touches.length >= 2 && spread < ANDROID_PALM_CLUSTER_SPREAD;
+
+          if (looksLikePalmCluster || touches.length > 2) {
+            penSignalBadge.hidden = false;
+            penSignalBadge.textContent = `パーム除外 ${touches.length}点 / 間隔:${Math.round(spread)}`;
+            penSignalBadge.style.background = 'rgba(21, 128, 61, .94)';
+            rejectPendingAndroidTouches();
+            return;
+          }
+
+          if (touches.length === 1 && state.currentMode === 'idle') {
+            const touch = touches[0];
+            touch.startScreenX = touch.screenX;
+            touch.startScreenY = touch.screenY;
+            state.currentMode = 'panning';
+            modeStatusText.textContent = 'パン中';
+            renderOverlay();
+            return;
+          }
+
+          if (touches.length === 2 && (state.currentMode === 'idle' || state.currentMode === 'panning')) {
+            state.initialPinchDist = Math.hypot(
+              touches[0].screenX - touches[1].screenX,
+              touches[0].screenY - touches[1].screenY
+            );
+            state.initialCamera = { x: state.camera.x, y: state.camera.y, zoom: state.camera.zoom };
+            state.twoFingerStartCenter = {
+              x: (touches[0].screenX + touches[1].screenX) / 2,
+              y: (touches[0].screenY + touches[1].screenY) / 2
+            };
+            state.currentMode = 'zooming';
+            modeStatusText.textContent = 'ズーム・パン中';
+            renderOverlay();
+          }
+        }
+
         
         container.addEventListener('wheel', (e) => {
           if (e.ctrlKey || e.metaKey) {
@@ -2662,15 +2732,13 @@
           }
         }, { passive: true });
 
-        // iOS / iPadOS コンテキストメニューやスクロールを完全に抑止。
-        // AndroidブラウザがSペンのサイドボタンを右クリックとして渡す場合は、
-        // 次のペン接触を一時的な消しゴムとして扱う。
+        // コンテキストメニューは通常のペン長押しでも発生するため、
+        // サイドボタンとは判定せずブラウザメニューの抑止だけを行う。
         window.addEventListener('contextmenu', (e) => {
           if (e.pointerType === 'pen' || e.button === 2) {
-            state.stylusButtonLatchUntil = performance.now() + 1200;
             penSignalBadge.hidden = false;
-            penSignalBadge.textContent = `Sペン右クリック信号 button:${e.button}`;
-            penSignalBadge.style.background = 'rgba(185, 28, 28, .94)';
+            penSignalBadge.textContent = `ペン長押し検出 button:${e.button}`;
+            penSignalBadge.style.background = 'rgba(15, 23, 42, .9)';
           }
           e.preventDefault();
         });
@@ -2703,6 +2771,11 @@
             const isLikelyAndroidPalm = IS_ANDROID && contactSize >= ANDROID_PALM_CONTACT_SIZE;
             if (stylusIsActive || stylusWasJustUsed || androidStylusIsNear || isLikelyAndroidPalm) {
               state.rejectedTouchIds.add(e.pointerId);
+              if (IS_ANDROID) {
+                penSignalBadge.hidden = false;
+                penSignalBadge.textContent = `パーム除外 接触幅:${Math.round(contactSize)}`;
+                penSignalBadge.style.background = 'rgba(21, 128, 61, .94)';
+              }
               return;
             }
           } else if (e.pointerType === 'pen') {
@@ -2714,6 +2787,10 @@
               trackedTouches.every(touch =>
                 eventTime - touch.startTime >= INTENTIONAL_TWO_FINGER_HOLD_MS
               );
+            if (state.androidTouchIntentTimer) {
+              clearTimeout(state.androidTouchIntentTimer);
+              state.androidTouchIntentTimer = null;
+            }
             if (trackedTouches.length && !intentionalTwoFingerHold) {
               trackedTouches.forEach(touch => state.rejectedTouchIds.add(touch.id));
               state.activeTouches.clear();
@@ -2749,6 +2826,22 @@
               startScreenX: screenX, startScreenY: screenY,
               startTime: performance.now()
             });
+
+            if (IS_ANDROID && state.selectedStrokeIds.size === 0) {
+              const width = Math.round(Number(e.width) || 0);
+              const height = Math.round(Number(e.height) || 0);
+              penSignalBadge.hidden = false;
+              penSignalBadge.textContent = `タッチ ${width}×${height}  ${state.activeTouches.size}点`;
+              penSignalBadge.style.background = 'rgba(146, 64, 14, .92)';
+              touchCountText.textContent = `${state.activeTouches.size}本（判定中）`;
+              if (!state.androidTouchIntentTimer) {
+                state.androidTouchIntentTimer = setTimeout(
+                  activatePendingAndroidTouches,
+                  ANDROID_TOUCH_INTENT_DELAY_MS
+                );
+              }
+              return;
+            }
 
             if (state.activeTouches.size === 2 && (state.currentMode === 'idle' || state.currentMode === 'panning')) {
               const touches = Array.from(state.activeTouches.values());
