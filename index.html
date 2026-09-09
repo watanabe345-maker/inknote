@@ -223,6 +223,22 @@
         box-shadow: 0 2px 10px rgba(0, 0, 0, 0.15);
       }
 
+      #penSignalBadge {
+        position: absolute;
+        top: 68px;
+        right: 12px;
+        z-index: 21;
+        max-width: calc(100vw - 24px);
+        padding: 7px 11px;
+        border-radius: 10px;
+        background: rgba(15, 23, 42, 0.9);
+        color: #f8fafc;
+        font: 700 12px/1.25 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        box-shadow: 0 4px 14px rgba(0, 0, 0, .2);
+        pointer-events: none;
+      }
+      #penSignalBadge[hidden] { display: none; }
+
       .status-tag {
         display: flex;
         align-items: center;
@@ -877,6 +893,8 @@
         </div>
       </div>
 
+      <div id="penSignalBadge" role="status" aria-live="polite" hidden>Sペン信号</div>
+
       <!-- 2本指シミュレーター（マウスや単一ポインタ環境でテスト用） -->
       <button id="twoFingerSimToggle" title="PCマウスで「2本指タップ＋囲み選択」や「スワイプ」をテスト">
         <span>✌️ 2本指ホールド（テスト用）</span>
@@ -983,6 +1001,8 @@
           activePenId: null,
           stylusButtonLatchUntil: -Infinity,
           lastReportedPenButtons: null,
+          stylusInProximity: false,
+          lastStylusHoverTime: -Infinity,
           currentPenPoints: [], // { x, y, pressure, time }
           currentMode: 'idle', // 'idle' | 'pen_draw' | 'lasso_erase' | 'lasso_select' | 'two_finger_swipe' | 'dragging_selection'
           // 既存コアの state.strokes 等は、現在ページへの透過的なアクセサとして維持する
@@ -1042,6 +1062,11 @@
           pointerTypeText.textContent = 'Sペン';
           pressureText.textContent = Number(event.pressure || 0).toFixed(2);
           buttonsText.textContent = `${event.buttons} / ${event.button}`;
+          penSignalBadge.hidden = false;
+          penSignalBadge.textContent = `Sペン buttons:${event.buttons}  button:${event.button}`;
+          penSignalBadge.style.background = isStylusSideButtonPressed(event)
+            ? 'rgba(185, 28, 28, .94)'
+            : 'rgba(15, 23, 42, .9)';
         }
 
         // --- DOM要素の取得 ---
@@ -1072,6 +1097,7 @@
         const pointerTypeText = document.getElementById('pointerTypeText');
         const pressureText = document.getElementById('pressureText');
         const buttonsText = document.getElementById('buttonsText');
+        const penSignalBadge = document.getElementById('penSignalBadge');
         const touchCountText = document.getElementById('touchCountText');
         const modeStatusText = document.getElementById('modeStatusText');
         const pointerStatusDot = document.getElementById('pointerStatusDot');
@@ -1120,6 +1146,9 @@
         // タッチだけを除外し、通常のパン・ピンチ操作を妨げないようにする。
         const STYLUS_TOUCH_GRACE_MS = 90;
         const INTENTIONAL_TWO_FINGER_HOLD_MS = 90;
+        const IS_ANDROID = /Android/i.test(navigator.userAgent);
+        const ANDROID_STYLUS_PROXIMITY_MS = 1800;
+        const ANDROID_PALM_CONTACT_SIZE = 42;
         let saveTimer = null;
         let storageWarningShown = false;
         const deletedNotebookIds = new Set();
@@ -2609,9 +2638,29 @@
         }, { passive: false });
 
         container.addEventListener('pointerdown', handlePointerDown, { passive: false });
+        container.addEventListener('pointerenter', (e) => {
+          if (e.pointerType !== 'pen') return;
+          state.stylusInProximity = true;
+          state.lastStylusHoverTime = performance.now();
+          updatePenTelemetry(e);
+        });
+        container.addEventListener('pointerleave', (e) => {
+          if (e.pointerType === 'pen' && state.activePenId === null) {
+            state.stylusInProximity = false;
+          }
+        });
         window.addEventListener('pointermove', handlePointerMove, { passive: false });
         window.addEventListener('pointerup', handlePointerUp, { passive: false });
         window.addEventListener('pointercancel', handlePointerUp, { passive: false });
+        window.addEventListener('pointerrawupdate', (e) => {
+          if (e.pointerType !== 'pen') return;
+          state.stylusInProximity = true;
+          state.lastStylusHoverTime = performance.now();
+          updatePenTelemetry(e);
+          if (isStylusSideButtonPressed(e)) {
+            state.stylusButtonLatchUntil = performance.now() + 1200;
+          }
+        }, { passive: true });
 
         // iOS / iPadOS コンテキストメニューやスクロールを完全に抑止。
         // AndroidブラウザがSペンのサイドボタンを右クリックとして渡す場合は、
@@ -2619,6 +2668,9 @@
         window.addEventListener('contextmenu', (e) => {
           if (e.pointerType === 'pen' || e.button === 2) {
             state.stylusButtonLatchUntil = performance.now() + 1200;
+            penSignalBadge.hidden = false;
+            penSignalBadge.textContent = `Sペン右クリック信号 button:${e.button}`;
+            penSignalBadge.style.background = 'rgba(185, 28, 28, .94)';
           }
           e.preventDefault();
         });
@@ -2643,12 +2695,20 @@
           if (e.pointerType === 'touch') {
             const stylusIsActive = state.activePenId !== null;
             const stylusWasJustUsed = eventTime - state.lastStylusTime < STYLUS_TOUCH_GRACE_MS;
-            if (stylusIsActive || stylusWasJustUsed) {
+            const contactSize = Math.max(Number(e.width) || 0, Number(e.height) || 0);
+            const androidStylusIsNear = IS_ANDROID && (
+              state.stylusInProximity ||
+              eventTime - state.lastStylusHoverTime < ANDROID_STYLUS_PROXIMITY_MS
+            );
+            const isLikelyAndroidPalm = IS_ANDROID && contactSize >= ANDROID_PALM_CONTACT_SIZE;
+            if (stylusIsActive || stylusWasJustUsed || androidStylusIsNear || isLikelyAndroidPalm) {
               state.rejectedTouchIds.add(e.pointerId);
               return;
             }
           } else if (e.pointerType === 'pen') {
             state.lastStylusTime = eventTime;
+            state.stylusInProximity = true;
+            state.lastStylusHoverTime = eventTime;
             const trackedTouches = Array.from(state.activeTouches.values());
             const intentionalTwoFingerHold = trackedTouches.length === 2 &&
               trackedTouches.every(touch =>
@@ -2823,7 +2883,11 @@
           if (state.viewMode !== 'editing') return;
           e.preventDefault();
           if (e.pointerType === 'touch' && state.rejectedTouchIds.has(e.pointerId)) return;
-          if (e.pointerType === 'pen') state.lastStylusTime = performance.now();
+          if (e.pointerType === 'pen') {
+            state.lastStylusTime = performance.now();
+            state.stylusInProximity = true;
+            state.lastStylusHoverTime = state.lastStylusTime;
+          }
           updatePenTelemetry(e);
           const rect = inkCanvas.getBoundingClientRect();
           const screenX = e.clientX - rect.left;
@@ -3102,6 +3166,7 @@
           if (e.pointerType === 'touch' && state.rejectedTouchIds.delete(e.pointerId)) return;
           if (e.pointerType === 'pen') {
             state.lastStylusTime = performance.now();
+            state.stylusInProximity = false;
             updatePenTelemetry(e);
           }
 
