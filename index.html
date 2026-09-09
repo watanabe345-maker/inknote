@@ -1004,6 +1004,7 @@
           stylusInProximity: false,
           lastStylusHoverTime: -Infinity,
           androidTouchIntentTimer: null,
+          androidTwoFingerIntentConfirmed: false,
           currentPenPoints: [], // { x, y, pressure, time }
           currentMode: 'idle', // 'idle' | 'pen_draw' | 'lasso_erase' | 'lasso_select' | 'two_finger_swipe' | 'dragging_selection'
           // 既存コアの state.strokes 等は、現在ページへの透過的なアクセサとして維持する
@@ -1149,9 +1150,9 @@
         const INTENTIONAL_TWO_FINGER_HOLD_MS = 90;
         const IS_ANDROID = /Android/i.test(navigator.userAgent);
         const ANDROID_STYLUS_PROXIMITY_MS = 1800;
-        const ANDROID_PALM_CONTACT_SIZE = 42;
+        const ANDROID_PALM_CONTACT_SIZE = 36;
         const ANDROID_TOUCH_INTENT_DELAY_MS = 170;
-        const ANDROID_PALM_CLUSTER_SPREAD = 72;
+        const ANDROID_MIN_TWO_FINGER_SPREAD = 120;
         let saveTimer = null;
         let storageWarningShown = false;
         const deletedNotebookIds = new Set();
@@ -1649,7 +1650,10 @@
 
         function resetEditorInteraction() {
           if (state.holdTimer) clearTimeout(state.holdTimer);
+          if (state.androidTouchIntentTimer) clearTimeout(state.androidTouchIntentTimer);
           state.holdTimer = null;
+          state.androidTouchIntentTimer = null;
+          state.androidTwoFingerIntentConfirmed = false;
           state.activeTouches.clear();
           state.rejectedTouchIds.clear();
           state.activePenId = null;
@@ -2620,6 +2624,7 @@
           state.initialPinchDist = null;
           state.initialCamera = null;
           state.twoFingerStartCenter = null;
+          state.androidTwoFingerIntentConfirmed = false;
           touchCountText.textContent = '0本';
           if (state.currentMode === 'panning' || state.currentMode === 'zooming') {
             state.currentMode = 'idle';
@@ -2641,7 +2646,11 @@
                 touches[0].screenY - touches[1].screenY
               )
             : Infinity;
-          const looksLikePalmCluster = touches.length >= 2 && spread < ANDROID_PALM_CLUSTER_SPREAD;
+          const hasBroadContact = touches.some(touch =>
+            Math.max(touch.width || 0, touch.height || 0) >= ANDROID_PALM_CONTACT_SIZE
+          );
+          const looksLikePalmCluster = touches.length >= 2 &&
+            (spread < ANDROID_MIN_TWO_FINGER_SPREAD || hasBroadContact);
 
           if (looksLikePalmCluster || touches.length > 2) {
             penSignalBadge.hidden = false;
@@ -2652,6 +2661,7 @@
           }
 
           if (touches.length === 1 && state.currentMode === 'idle') {
+            state.androidTwoFingerIntentConfirmed = false;
             const touch = touches[0];
             touch.startScreenX = touch.screenX;
             touch.startScreenY = touch.screenY;
@@ -2662,6 +2672,7 @@
           }
 
           if (touches.length === 2 && (state.currentMode === 'idle' || state.currentMode === 'panning')) {
+            state.androidTwoFingerIntentConfirmed = true;
             state.initialPinchDist = Math.hypot(
               touches[0].screenX - touches[1].screenX,
               touches[0].screenY - touches[1].screenY
@@ -2732,13 +2743,30 @@
           }
         }, { passive: true });
 
-        // コンテキストメニューは通常のペン長押しでも発生するため、
-        // サイドボタンとは判定せずブラウザメニューの抑止だけを行う。
+        // Z Fold 6では通常のSペン長押しがcontextmenuとして通知される。
+        // 現在の描画を破棄し、その位置からなげなわ消しゴムへ切り替える。
         window.addEventListener('contextmenu', (e) => {
-          if (e.pointerType === 'pen' || e.button === 2) {
+          if ((e.pointerType === 'pen' || e.button === 2) && state.activePenId !== null) {
+            if (state.holdTimer) {
+              clearTimeout(state.holdTimer);
+              state.holdTimer = null;
+            }
+            const rect = inkCanvas.getBoundingClientRect();
+            const point = toWorld(e.clientX - rect.left, e.clientY - rect.top);
+            state.holdAnchor = null;
+            state.currentMode = 'lasso_erase';
+            state.currentPenPoints = [{
+              x: point.x,
+              y: point.y,
+              pressure: e.pressure || 0.5,
+              time: performance.now()
+            }];
+            modeStatusText.textContent = '長押し消しゴム中';
             penSignalBadge.hidden = false;
-            penSignalBadge.textContent = `ペン長押し検出 button:${e.button}`;
-            penSignalBadge.style.background = 'rgba(15, 23, 42, .9)';
+            penSignalBadge.textContent = 'Sペン長押し：囲んで消去';
+            penSignalBadge.style.background = 'rgba(185, 28, 28, .94)';
+            redrawInkCanvas();
+            renderOverlay();
           }
           e.preventDefault();
         });
@@ -2783,7 +2811,12 @@
             state.stylusInProximity = true;
             state.lastStylusHoverTime = eventTime;
             const trackedTouches = Array.from(state.activeTouches.values());
+            const androidTouchIntentWasPending = IS_ANDROID && state.androidTouchIntentTimer !== null;
             const intentionalTwoFingerHold = trackedTouches.length === 2 &&
+              (!IS_ANDROID || (
+                state.androidTwoFingerIntentConfirmed &&
+                !androidTouchIntentWasPending
+              )) &&
               trackedTouches.every(touch =>
                 eventTime - touch.startTime >= INTENTIONAL_TWO_FINGER_HOLD_MS
               );
@@ -2794,6 +2827,7 @@
             if (trackedTouches.length && !intentionalTwoFingerHold) {
               trackedTouches.forEach(touch => state.rejectedTouchIds.add(touch.id));
               state.activeTouches.clear();
+              state.androidTwoFingerIntentConfirmed = false;
               state.currentMode = 'idle';
               touchCountText.textContent = '0本';
             }
@@ -2826,6 +2860,10 @@
               startScreenX: screenX, startScreenY: screenY,
               startTime: performance.now()
             });
+
+            if (state.activeTouches.size === 1) {
+              state.androidTwoFingerIntentConfirmed = false;
+            }
 
             if (IS_ANDROID && state.selectedStrokeIds.size === 0) {
               const width = Math.round(Number(e.width) || 0);
@@ -3264,10 +3302,16 @@
           }
 
           if (e.pointerType === 'touch') {
-            if (state.activeTouches.size >= 2) {
+            if (
+              state.activeTouches.size >= 2 &&
+              (!IS_ANDROID || state.androidTwoFingerIntentConfirmed)
+            ) {
               state.twoFingerCancelTime = performance.now();
             }
             state.activeTouches.delete(e.pointerId);
+            if (state.activeTouches.size < 2) {
+              state.androidTwoFingerIntentConfirmed = false;
+            }
             touchCountText.textContent = `${state.activeTouches.size}本`;
             
             if (state.activeTouches.size === 1 && state.currentMode === 'zooming') {
@@ -3278,6 +3322,10 @@
               state.currentMode = 'panning';
               modeStatusText.textContent = 'パン中';
             } else if (state.activeTouches.size === 0) {
+              if (state.androidTouchIntentTimer) {
+                clearTimeout(state.androidTouchIntentTimer);
+                state.androidTouchIntentTimer = null;
+              }
               state.twoFingerStartCenter = null;
               state.swipeTriggered = false;
               if (state.currentMode === 'zooming' || state.currentMode === 'panning') {
