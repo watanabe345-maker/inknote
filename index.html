@@ -585,7 +585,20 @@
         min-width:44px; height:44px; padding:0 14px; border-radius:14px; font:650 13px/1 system-ui;
         box-shadow:0 4px 16px rgba(15,23,42,.1); cursor:pointer;
       }
-      #editingPageLabel { display:none; }
+      #editorPageNavigation {
+        position:absolute; left:50%; top:max(62px, calc(50px + env(safe-area-inset-top))); z-index:20;
+        transform:translateX(-50%); display:flex; align-items:center; gap:8px;
+        padding:5px; border:1px solid rgba(203,213,225,.82); border-radius:16px;
+        background:rgba(255,255,255,.92); box-shadow:0 4px 16px rgba(15,23,42,.1);
+        backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px);
+      }
+      .editor-page-btn {
+        width:36px; height:34px; border:0; border-radius:11px; background:#eef2f7;
+        color:#334155; font:750 20px/1 system-ui; cursor:pointer; touch-action:manipulation;
+      }
+      .editor-page-btn:active { transform:scale(.94); background:#dbe5ef; }
+      .editor-page-btn:disabled { opacity:.34; cursor:not-allowed; }
+      #editingPageLabel { min-width:62px; text-align:center; color:#475569; font:700 12px/1 system-ui; }
       @media (max-width:700px) {
         .page-card { width:min(76vw, 520px); height:min(64vh, 700px); }
         .notebook-header-center { max-width:40vw; }
@@ -724,6 +737,11 @@
 
     <div id="appContainer" class="view-layer" hidden>
       <button id="closeEditorBtn" type="button">‹ 閉じる</button>
+      <nav id="editorPageNavigation" aria-label="編集中のページ移動">
+        <button id="previousEditingPageBtn" class="editor-page-btn" type="button" aria-label="前のページ" title="前のページ">‹</button>
+        <span id="editingPageLabel" aria-live="polite"></span>
+        <button id="nextEditingPageBtn" class="editor-page-btn" type="button" aria-label="次のページ" title="次のページ">›</button>
+      </nav>
       <!-- 手書き線キャンバス -->
       <canvas id="inkCanvas"></canvas>
       <!-- ジェスチャー軌跡・選択表示用オーバーレイ -->
@@ -918,7 +936,7 @@
 
         // --- 状態定義 ---
         const makeId = (prefix) => `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-        const makePage = () => ({ id: makeId('page'), strokes: [], undoStack: [], redoStack: [], thumbnail: null });
+        const makePage = () => ({ id: makeId('page'), strokes: [], undoStack: [], redoStack: [], thumbnail: null, updatedAt: Date.now() });
         const initialPage = makePage();
         const initialNotebook = {
           id: makeId('notebook'),
@@ -949,6 +967,8 @@
           initialPinchDist: null,
           initialCamera: null,
           activeTouches: new Map(), // pointerId -> { id, x, y, startX, startY, startTime }
+          rejectedTouchIds: new Set(),
+          lastStylusTime: -Infinity,
           activePenId: null,
           currentPenPoints: [], // { x, y, pressure, time }
           currentMode: 'idle', // 'idle' | 'pen_draw' | 'lasso_erase' | 'lasso_select' | 'two_finger_swipe' | 'dragging_selection'
@@ -1037,6 +1057,9 @@
         const openPageBtn = document.getElementById('openPageBtn');
         const deletePageBtn = document.getElementById('deletePageBtn');
         const closeEditorBtn = document.getElementById('closeEditorBtn');
+        const previousEditingPageBtn = document.getElementById('previousEditingPageBtn');
+        const nextEditingPageBtn = document.getElementById('nextEditingPageBtn');
+        const editingPageLabel = document.getElementById('editingPageLabel');
         const cloudSyncBtn = document.getElementById('cloudSyncBtn');
         const newNotebookModal = document.getElementById('newNotebookModal');
         const newNotebookForm = document.getElementById('newNotebookForm');
@@ -1053,7 +1076,11 @@
         // --- Phase 2: ライブラリ、ページ、3D画面遷移 ---
         const STORAGE_KEY = 'inknote_phase2_library_v1';
         const COVER_COLORS = ['#315f72', '#865146', '#566a45', '#6a557d', '#9a733c', '#394b68'];
+        const PALM_CONTACT_SIZE = 45;
+        const STYLUS_TOUCH_GRACE_MS = 650;
+        const INTENTIONAL_TWO_FINGER_HOLD_MS = 140;
         let saveTimer = null;
+        let storageWarningShown = false;
         const deletedNotebookIds = new Set();
         const deletedPageIds = new Set();
 
@@ -1162,7 +1189,8 @@
               pages: notebook.pages.map(page => ({
                 id: page.id,
                 strokes: page.strokes,
-                thumbnail: page.thumbnail
+                thumbnail: page.thumbnail,
+                updatedAt: Number(page.updatedAt) || 0
               }))
             }))
           };
@@ -1178,7 +1206,8 @@
               strokes: Array.isArray(page.strokes) ? page.strokes : [],
               undoStack: [],
               redoStack: [],
-              thumbnail: typeof page.thumbnail === 'string' ? page.thumbnail : null
+              thumbnail: typeof page.thumbnail === 'string' ? page.thumbnail : null,
+              updatedAt: Number(page.updatedAt) || 0
             }))
           };
         }
@@ -1208,7 +1237,19 @@
               return;
             }
             const mergedPages = new Map(localNotebook.pages.map(page => [page.id, page]));
-            remoteNotebook.pages.forEach(page => mergedPages.set(page.id, page));
+            remoteNotebook.pages.forEach(remotePage => {
+              const localPage = mergedPages.get(remotePage.id);
+              if (!localPage) {
+                mergedPages.set(remotePage.id, remotePage);
+                return;
+              }
+              const localUpdatedAt = Number(localPage.updatedAt) || 0;
+              const remoteUpdatedAt = Number(remotePage.updatedAt) || 0;
+              if (remoteUpdatedAt > localUpdatedAt ||
+                  (remoteUpdatedAt === localUpdatedAt && remotePage.strokes.length > localPage.strokes.length)) {
+                mergedPages.set(remotePage.id, remotePage);
+              }
+            });
             mergedNotebooks.set(remoteNotebook.id, { ...remoteNotebook, pages: Array.from(mergedPages.values()) });
           });
           state.notebooks = Array.from(mergedNotebooks.values());
@@ -1423,7 +1464,8 @@
                 strokes: Array.isArray(p.strokes) ? p.strokes : [],
                 undoStack: [],
                 redoStack: [],
-                thumbnail: typeof p.thumbnail === 'string' ? p.thumbnail : null
+                thumbnail: typeof p.thumbnail === 'string' ? p.thumbnail : null,
+                updatedAt: Number(p.updatedAt) || 0
               }))
             }));
             state.currentNotebookId = state.notebooks.some(n => n.id === parsed.currentNotebookId)
@@ -1439,26 +1481,49 @@
         function saveLibraryNow() {
           clearTimeout(saveTimer);
           saveTimer = null;
-          try {
-            const serializable = {
-              currentNotebookId: state.currentNotebookId,
-              currentPageId: state.currentPageId,
-              deletedNotebookIds: Array.from(deletedNotebookIds),
-              deletedPageIds: Array.from(deletedPageIds),
-              notebooks: state.notebooks.map(n => ({
-                id: n.id, title: n.title, coverColor: n.coverColor,
-                pages: n.pages.map(p => ({ id: p.id, strokes: p.strokes, thumbnail: p.thumbnail }))
+          const makeSerializableLibrary = includeThumbnails => ({
+            currentNotebookId: state.currentNotebookId,
+            currentPageId: state.currentPageId,
+            deletedNotebookIds: Array.from(deletedNotebookIds),
+            deletedPageIds: Array.from(deletedPageIds),
+            notebooks: state.notebooks.map(n => ({
+              id: n.id, title: n.title, coverColor: n.coverColor,
+              pages: n.pages.map(p => ({
+                id: p.id,
+                strokes: p.strokes,
+                thumbnail: includeThumbnails ? p.thumbnail : null,
+                updatedAt: Number(p.updatedAt) || 0
               }))
-            };
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(serializable));
+            }))
+          });
+          try {
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(makeSerializableLibrary(true)));
+            storageWarningShown = false;
           } catch (error) {
-            console.warn('InkNote library could not be saved.', error);
+            // サムネイルは再生成できるため、容量不足時も手書き本文を最優先で残す。
+            try {
+              localStorage.setItem(STORAGE_KEY, JSON.stringify(makeSerializableLibrary(false)));
+              if (!storageWarningShown) {
+                storageWarningShown = true;
+                showToast('保存容量を確保するため、プレビュー画像を整理しました', '💾');
+              }
+            } catch (fallbackError) {
+              console.warn('InkNote library could not be saved.', fallbackError);
+              if (!storageWarningShown) {
+                storageWarningShown = true;
+                showToast('端末への保存に失敗しました。クラウド同期を実行してください', '⚠️');
+              }
+            }
           }
         }
 
         function scheduleLibrarySave() {
           clearTimeout(saveTimer);
           saveTimer = setTimeout(saveLibraryNow, 180);
+        }
+
+        function markCurrentPageUpdated() {
+          if (state.currentPage) state.currentPage.updatedAt = Date.now();
         }
 
         function captureCurrentPageThumbnail() {
@@ -1502,6 +1567,7 @@
           if (state.holdTimer) clearTimeout(state.holdTimer);
           state.holdTimer = null;
           state.activeTouches.clear();
+          state.rejectedTouchIds.clear();
           state.activePenId = null;
           state.currentPenPoints = [];
           state.currentMode = 'idle';
@@ -1523,6 +1589,7 @@
           }
           if (mode === 'editing') {
             resetEditorInteraction();
+            updateEditingPageNavigation();
             requestAnimationFrame(() => { resizeCanvas(); redrawInkCanvas(); renderOverlay(); });
           }
           scheduleLibrarySave();
@@ -1633,6 +1700,31 @@
           deletePageBtn.disabled = notebook.pages.length <= 1;
           updatePageTransforms(0);
           scheduleLibrarySave();
+        }
+
+        function updateEditingPageNavigation() {
+          const notebook = state.currentNotebook;
+          const pageIndex = notebook ? notebook.pages.findIndex(page => page.id === state.currentPageId) : -1;
+          const safeIndex = pageIndex >= 0 ? pageIndex : 0;
+          previousEditingPageBtn.disabled = !notebook || safeIndex <= 0;
+          nextEditingPageBtn.disabled = !notebook || safeIndex >= notebook.pages.length - 1;
+          editingPageLabel.textContent = notebook ? `${safeIndex + 1} / ${notebook.pages.length}` : '';
+        }
+
+        function navigateEditingPage(offset) {
+          const notebook = state.currentNotebook;
+          if (!notebook) return;
+          const currentIndex = notebook.pages.findIndex(page => page.id === state.currentPageId);
+          const targetIndex = Math.max(0, Math.min(currentIndex + offset, notebook.pages.length - 1));
+          if (currentIndex < 0 || targetIndex === currentIndex) return;
+          captureCurrentPageThumbnail();
+          saveLibraryNow();
+          state.activePageIndex = targetIndex;
+          state.currentPageId = notebook.pages[targetIndex].id;
+          resetEditorInteraction();
+          updateEditingPageNavigation();
+          saveLibraryNow();
+          requestAnimationFrame(() => { redrawInkCanvas(); renderOverlay(); updateUndoRedoUI(); });
         }
 
         function openActivePage() {
@@ -2308,6 +2400,7 @@
         function executeAction(action) {
           state.undoStack.push(action);
           state.redoStack = []; // 新しいアクションでredoクリア
+          markCurrentPageUpdated();
           updateUndoRedoUI();
           scheduleLibrarySave();
         }
@@ -2343,6 +2436,7 @@
           redrawInkCanvas();
           renderOverlay();
           updateUndoRedoUI();
+          markCurrentPageUpdated();
           scheduleLibrarySave();
         }
 
@@ -2373,6 +2467,7 @@
           redrawInkCanvas();
           renderOverlay();
           updateUndoRedoUI();
+          markCurrentPageUpdated();
           scheduleLibrarySave();
         }
 
@@ -2458,7 +2553,7 @@
         document.addEventListener('gesturechange', (e) => e.preventDefault());
         document.addEventListener('gestureend', (e) => e.preventDefault());
 
-                function handlePointerDown(e) {
+        function handlePointerDown(e) {
           if (e.target.closest('#selectionActionBar') || e.target.closest('#topToolbar') || e.target.closest('button') || e.target.closest('#statusBar') || e.target.closest('#guideModal')) {
             return;
           }
@@ -2469,6 +2564,31 @@
           const screenY = e.clientY - rect.top;
           const { x, y } = toWorld(screenX, screenY);
           const pressure = e.pressure || 0.5;
+          const eventTime = performance.now();
+
+          if (e.pointerType === 'touch') {
+            const contactSize = Math.max(Number(e.width) || 0, Number(e.height) || 0);
+            const stylusIsActive = state.activePenId !== null;
+            const stylusWasJustUsed = eventTime - state.lastStylusTime < STYLUS_TOUCH_GRACE_MS;
+            if (stylusIsActive || stylusWasJustUsed || contactSize >= PALM_CONTACT_SIZE) {
+              state.rejectedTouchIds.add(e.pointerId);
+              return;
+            }
+          } else if (e.pointerType === 'pen') {
+            state.lastStylusTime = eventTime;
+            const trackedTouches = Array.from(state.activeTouches.values());
+            const intentionalTwoFingerHold = trackedTouches.length >= 2 &&
+              trackedTouches.every(touch =>
+                eventTime - touch.startTime >= INTENTIONAL_TWO_FINGER_HOLD_MS &&
+                Math.max(touch.width || 0, touch.height || 0) < PALM_CONTACT_SIZE
+              );
+            if (trackedTouches.length && !intentionalTwoFingerHold) {
+              trackedTouches.forEach(touch => state.rejectedTouchIds.add(touch.id));
+              state.activeTouches.clear();
+              state.currentMode = 'idle';
+              touchCountText.textContent = '0本';
+            }
+          }
 
           if (state.holdTimer) { clearTimeout(state.holdTimer); state.holdTimer = null; }
 
@@ -2478,6 +2598,8 @@
               id: e.pointerId,
               screenX, screenY,
               x, y,
+              width: Number(e.width) || 0,
+              height: Number(e.height) || 0,
               startX: x, startY: y,
               startScreenX: screenX, startScreenY: screenY,
               startTime: performance.now()
@@ -2616,6 +2738,8 @@
         function handlePointerMove(e) {
           if (state.viewMode !== 'editing') return;
           e.preventDefault();
+          if (e.pointerType === 'touch' && state.rejectedTouchIds.has(e.pointerId)) return;
+          if (e.pointerType === 'pen') state.lastStylusTime = performance.now();
           const rect = inkCanvas.getBoundingClientRect();
           const screenX = e.clientX - rect.left;
           const screenY = e.clientY - rect.top;
@@ -2846,6 +2970,9 @@
           if (state.viewMode !== 'editing') return;
           e.preventDefault();
 
+          if (e.pointerType === 'touch' && state.rejectedTouchIds.delete(e.pointerId)) return;
+          if (e.pointerType === 'pen') state.lastStylusTime = performance.now();
+
           if (e.pointerType === 'touch') {
             if (state.activeTouches.size >= 2) {
               state.twoFingerCancelTime = performance.now();
@@ -3040,6 +3167,8 @@
         backToHomeBtn.addEventListener('click', () => setViewMode('home'));
         closeEditorBtn.addEventListener('click', () => setViewMode('notebook'));
         closeEditorBtn.addEventListener('click', () => scheduleAuthorizedAutoSync(350));
+        previousEditingPageBtn.addEventListener('click', () => navigateEditingPage(-1));
+        nextEditingPageBtn.addEventListener('click', () => navigateEditingPage(1));
         openPageBtn.addEventListener('click', openActivePage);
         deletePageBtn.addEventListener('click', requestActivePageDeletion);
         addPageBtn.addEventListener('click', () => {
@@ -3098,10 +3227,15 @@
           const velocity = deltaX / elapsed;
           const distance = Math.abs(deltaX);
           const speed = Math.abs(velocity);
-          if (distance >= 22 || speed >= .16) {
-            const projectedDistance = distance + speed * 260;
-            let pageCount = Math.max(1, Math.min(5, Math.round(projectedDistance / 85)));
-            if (speed >= 1.35) pageCount = Math.max(pageCount, 4);
+          if (distance >= 18 || speed >= .12) {
+            // ゆっくり動かした場合は距離にかかわらず必ず隣の1ページへ。
+            // 複数ページ送りは速度のあるフリックだけに限定する。
+            let pageCount = 1;
+            if (speed >= .65) {
+              const momentum = speed * 220 + Math.min(distance, 180) * .35;
+              pageCount = Math.max(2, Math.min(5, Math.round(momentum / 110)));
+              if (speed >= 1.8) pageCount = Math.max(pageCount, 4);
+            }
             const direction = deltaX < 0 ? 1 : -1;
             animatePageFling(state.activePageIndex + direction * pageCount);
           } else {
