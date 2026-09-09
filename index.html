@@ -1021,6 +1021,16 @@
           };
         }
 
+        // Samsung Internet / Chrome はSペンのサイドボタンを環境によって
+        // secondary button (2) または eraser button (32) として通知する。
+        function isStylusSideButtonPressed(event) {
+          if (event.pointerType !== 'pen') return false;
+          return (event.buttons & 2) !== 0 ||
+            (event.buttons & 32) !== 0 ||
+            event.button === 2 ||
+            event.button === 5;
+        }
+
         // --- DOM要素の取得 ---
         const container = document.getElementById('appContainer');
         const inkCanvas = document.getElementById('inkCanvas');
@@ -2756,8 +2766,7 @@
 
           const isPalmRejected = state.twoFingerCancelTime > 0 && (performance.now() - state.twoFingerCancelTime < 800);
           const isTwoFingerHold = state.activeTouches.size >= 2 || state.isTwoFingerSimulated || isPalmRejected;
-          const isStylusSideButtonPressed = (e.buttons & 32) !== 0 || (e.buttons & 2) !== 0 || e.button === 5;
-          const isLassoEraser = isStylusSideButtonPressed || state.isLassoEraserModeToggle;
+          const isLassoEraser = isStylusSideButtonPressed(e) || state.isLassoEraserModeToggle;
           
           state.activePenId = e.pointerId;
           state.currentPenPoints = [{ x, y, pressure, time: performance.now() }];
@@ -2785,6 +2794,27 @@
           const screenX = e.clientX - rect.left;
           const screenY = e.clientY - rect.top;
           const { x, y } = toWorld(screenX, screenY);
+
+          // ペンを画面に触れた後でSペンのサイドボタンを押した場合も、
+          // その地点から一時的ななげなわ消しゴムへ切り替える。
+          if (
+            e.pointerType === 'pen' &&
+            state.activePenId === e.pointerId &&
+            state.currentMode === 'pen_draw' &&
+            isStylusSideButtonPressed(e)
+          ) {
+            if (state.holdTimer) {
+              clearTimeout(state.holdTimer);
+              state.holdTimer = null;
+            }
+            state.holdAnchor = null;
+            state.currentMode = 'lasso_erase';
+            state.currentPenPoints = [{ x, y, pressure: e.pressure || 0.5, time: performance.now() }];
+            modeStatusText.textContent = 'Sペン消しゴム中';
+            redrawInkCanvas();
+            renderOverlay();
+            return;
+          }
 
           // タッチのジェスチャー処理
           if (e.pointerType === 'touch') {
