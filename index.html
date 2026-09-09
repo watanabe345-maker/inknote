@@ -519,6 +519,16 @@
         gap: clamp(24px, 5vw, 54px);
       }
       .notebook-tile { background: none; border: 0; color: inherit; text-align: left; cursor: pointer; min-width: 0; }
+      .notebook-tile-wrap { position:relative; min-width:0; }
+      .notebook-tile-wrap .notebook-tile { display:block; width:100%; }
+      .delete-notebook-btn {
+        position:absolute; right:7px; bottom:24px; z-index:2;
+        width:38px; height:38px; border-radius:50%; border:1px solid rgba(255,255,255,.16);
+        color:#d8e1e8; background:rgba(7,13,18,.38); backdrop-filter:blur(8px);
+        -webkit-backdrop-filter:blur(8px); cursor:pointer; touch-action:manipulation;
+      }
+      .delete-notebook-btn:active { transform:scale(.94); background:rgba(185,28,28,.72); }
+      .delete-notebook-btn:disabled { opacity:.3; cursor:not-allowed; }
       .notebook-cover {
         aspect-ratio: 4 / 5;
         border-radius: 7px 16px 16px 7px;
@@ -650,6 +660,16 @@
       .dialog-btn.secondary { color:#475569; background:#eef2f6; }
       .dialog-btn.primary { color:#fff; background:#2563eb; }
       .dialog-btn:active { transform: scale(.97); }
+      #confirmModal {
+        position:fixed; inset:0; z-index:210; display:flex; align-items:center; justify-content:center;
+        padding:20px; background:rgba(8,15,22,.62); backdrop-filter:blur(9px);
+        -webkit-backdrop-filter:blur(9px); opacity:0; pointer-events:none; transition:opacity .2s ease;
+        touch-action:manipulation;
+      }
+      #confirmModal.open { opacity:1; pointer-events:auto; }
+      #confirmModal.open .new-notebook-card { transform:translateY(0) scale(1); }
+      #confirmMessage { color:#64748b; font-size:14px; line-height:1.65; white-space:pre-line; }
+      .dialog-btn.danger { color:#fff; background:#dc2626; }
     </style>
   </head>
   <body>
@@ -672,7 +692,10 @@
       </header>
       <div id="pageStage" aria-label="左右にスワイプしてページをめくる"></div>
       <div id="flipHint">左右にスワイプでページをめくる · タップで編集</div>
-      <footer id="notebookFooter"><button id="openPageBtn" class="phase2-btn" type="button">このページを編集</button></footer>
+      <footer id="notebookFooter">
+        <button id="deletePageBtn" class="phase2-btn" type="button">🗑️ ページ削除</button>
+        <button id="openPageBtn" class="phase2-btn" type="button">このページを編集</button>
+      </footer>
     </section>
 
     <div id="newNotebookModal" role="dialog" aria-modal="true" aria-labelledby="newNotebookTitle" aria-hidden="true">
@@ -686,6 +709,17 @@
           <button class="dialog-btn primary" type="submit">作成</button>
         </div>
       </form>
+    </div>
+
+    <div id="confirmModal" role="dialog" aria-modal="true" aria-labelledby="confirmTitle" aria-hidden="true">
+      <div class="new-notebook-card">
+        <h2 id="confirmTitle" style="font-size:21px;margin-bottom:10px;">削除の確認</h2>
+        <p id="confirmMessage"></p>
+        <div class="new-notebook-actions">
+          <button id="confirmCancelBtn" class="dialog-btn secondary" type="button">キャンセル</button>
+          <button id="confirmDeleteBtn" class="dialog-btn danger" type="button">削除</button>
+        </div>
+      </div>
     </div>
 
     <div id="appContainer" class="view-layer" hidden>
@@ -1001,12 +1035,18 @@
         const notebookTitle = document.getElementById('notebookTitle');
         const pageCounter = document.getElementById('pageCounter');
         const openPageBtn = document.getElementById('openPageBtn');
+        const deletePageBtn = document.getElementById('deletePageBtn');
         const closeEditorBtn = document.getElementById('closeEditorBtn');
         const cloudSyncBtn = document.getElementById('cloudSyncBtn');
         const newNotebookModal = document.getElementById('newNotebookModal');
         const newNotebookForm = document.getElementById('newNotebookForm');
         const newNotebookName = document.getElementById('newNotebookName');
         const cancelNotebookBtn = document.getElementById('cancelNotebookBtn');
+        const confirmModal = document.getElementById('confirmModal');
+        const confirmTitle = document.getElementById('confirmTitle');
+        const confirmMessage = document.getElementById('confirmMessage');
+        const confirmCancelBtn = document.getElementById('confirmCancelBtn');
+        const confirmDeleteBtn = document.getElementById('confirmDeleteBtn');
 
         let dpr = window.devicePixelRatio || 1;
 
@@ -1014,6 +1054,8 @@
         const STORAGE_KEY = 'inknote_phase2_library_v1';
         const COVER_COLORS = ['#315f72', '#865146', '#566a45', '#6a557d', '#9a733c', '#394b68'];
         let saveTimer = null;
+        const deletedNotebookIds = new Set();
+        const deletedPageIds = new Set();
 
         // --- Phase 3: Google Drive appDataFolder クラウド同期 ---
         // 公開時は Google Cloud Console で本番ドメインと Drive API のみに制限すること。
@@ -1024,6 +1066,8 @@
         let googleTokenClient = null;
         let googleAccessToken = null;
         let googleApisReady = false;
+        let cloudSyncInFlight = null;
+        let autoSyncTimer = null;
 
         function setCloudButtonState(label, busy = false) {
           cloudSyncBtn.textContent = label;
@@ -1065,6 +1109,9 @@
             });
             googleApisReady = true;
             setCloudButtonState('☁️ Google Drive同期');
+            const existingToken = window.gapi.client.getToken?.();
+            if (existingToken?.access_token) googleAccessToken = existingToken.access_token;
+            scheduleAuthorizedAutoSync(250);
           } catch (error) {
             console.warn('Google Drive sync initialization failed.', error);
             cloudSyncBtn.disabled = true;
@@ -1091,7 +1138,8 @@
             return;
           }
           googleAccessToken = response.access_token;
-          syncWithGoogleDrive().catch(error => {
+          window.gapi?.client?.setToken?.({ access_token: googleAccessToken });
+          runGoogleDriveSync(false).catch(error => {
             console.error('Google Drive sync failed.', error);
             setCloudButtonState('☁️ 同期に失敗しました');
             cloudSyncBtn.title = error.message;
@@ -1105,6 +1153,8 @@
             exportedAt: new Date().toISOString(),
             currentNotebookId: state.currentNotebookId,
             currentPageId: state.currentPageId,
+            deletedNotebookIds: Array.from(deletedNotebookIds),
+            deletedPageIds: Array.from(deletedPageIds),
             notebooks: state.notebooks.map(notebook => ({
               id: notebook.id,
               title: notebook.title,
@@ -1135,8 +1185,19 @@
 
         function mergeCloudLibrary(remote) {
           if (!remote || !Array.isArray(remote.notebooks)) throw new Error('クラウドデータの形式が正しくありません');
-          const mergedNotebooks = new Map(state.notebooks.map(notebook => [notebook.id, notebook]));
+          (remote.deletedNotebookIds || []).forEach(id => deletedNotebookIds.add(id));
+          (remote.deletedPageIds || []).forEach(id => deletedPageIds.add(id));
+          const mergedNotebooks = new Map(
+            state.notebooks
+              .filter(notebook => !deletedNotebookIds.has(notebook.id))
+              .map(notebook => [notebook.id, {
+                ...notebook,
+                pages: notebook.pages.filter(page => !deletedPageIds.has(page.id))
+              }])
+          );
           remote.notebooks.map(normalizeCloudNotebook).forEach(remoteNotebook => {
+            if (deletedNotebookIds.has(remoteNotebook.id)) return;
+            remoteNotebook.pages = remoteNotebook.pages.filter(page => !deletedPageIds.has(page.id));
             const localNotebook = mergedNotebooks.get(remoteNotebook.id);
             if (!localNotebook) {
               mergedNotebooks.set(remoteNotebook.id, remoteNotebook);
@@ -1211,8 +1272,26 @@
           });
         }
 
-        async function syncWithGoogleDrive() {
-          setCloudButtonState('☁️ クラウドを確認中…', true);
+        function runGoogleDriveSync(silent = false) {
+          if (!googleAccessToken) return Promise.resolve(false);
+          if (cloudSyncInFlight) return cloudSyncInFlight;
+          cloudSyncInFlight = syncWithGoogleDrive({ silent })
+            .finally(() => { cloudSyncInFlight = null; });
+          return cloudSyncInFlight;
+        }
+
+        function scheduleAuthorizedAutoSync(delay = 500) {
+          clearTimeout(autoSyncTimer);
+          if (!googleApisReady || !googleAccessToken) return;
+          autoSyncTimer = setTimeout(() => {
+            runGoogleDriveSync(true).catch(error => {
+              console.warn('Automatic Google Drive sync failed.', error);
+            });
+          }, delay);
+        }
+
+        async function syncWithGoogleDrive({ silent = false } = {}) {
+          if (!silent) setCloudButtonState('☁️ クラウドを確認中…', true);
           captureCurrentPageThumbnail();
           let remoteFile = await findCloudBackup();
           if (remoteFile) {
@@ -1223,8 +1302,11 @@
           }
           await uploadCloudBackup(remoteFile.id, makeCloudPayload());
           saveLibraryNow();
-          setCloudButtonState('✓ 同期完了');
-          setTimeout(() => setCloudButtonState('☁️ Google Drive同期'), 2200);
+          if (!silent) {
+            setCloudButtonState('✓ 同期完了');
+            setTimeout(() => setCloudButtonState('☁️ Google Drive同期'), 2200);
+          }
+          return true;
         }
 
         // --- Phase 3: PWAメタデータ / Service Worker ---
@@ -1321,6 +1403,8 @@
             if (!raw) return;
             const parsed = JSON.parse(raw);
             if (!Array.isArray(parsed.notebooks) || parsed.notebooks.length === 0) return;
+            (parsed.deletedNotebookIds || []).forEach(id => deletedNotebookIds.add(id));
+            (parsed.deletedPageIds || []).forEach(id => deletedPageIds.add(id));
             state.notebooks = parsed.notebooks.map(n => ({
               id: n.id || makeId('notebook'),
               title: n.title || '無題のノート',
@@ -1350,6 +1434,8 @@
             const serializable = {
               currentNotebookId: state.currentNotebookId,
               currentPageId: state.currentPageId,
+              deletedNotebookIds: Array.from(deletedNotebookIds),
+              deletedPageIds: Array.from(deletedPageIds),
               notebooks: state.notebooks.map(n => ({
                 id: n.id, title: n.title, coverColor: n.coverColor,
                 pages: n.pages.map(p => ({ id: p.id, strokes: p.strokes, thumbnail: p.thumbnail }))
@@ -1436,6 +1522,8 @@
         function renderHome() {
           notebookGrid.replaceChildren();
           state.notebooks.forEach(notebook => {
+            const wrapper = document.createElement('div');
+            wrapper.className = 'notebook-tile-wrap';
             const tile = document.createElement('button');
             tile.type = 'button';
             tile.className = 'notebook-tile';
@@ -1451,7 +1539,19 @@
             meta.textContent = `${notebook.pages.length} ページ`;
             tile.append(cover, name, meta);
             tile.addEventListener('click', () => openNotebook(notebook.id));
-            notebookGrid.appendChild(tile);
+            const deleteButton = document.createElement('button');
+            deleteButton.type = 'button';
+            deleteButton.className = 'delete-notebook-btn';
+            deleteButton.textContent = '🗑️';
+            deleteButton.setAttribute('aria-label', `${notebook.title}を削除`);
+            deleteButton.title = state.notebooks.length === 1 ? '最後のノートは削除できません' : 'ノートを削除';
+            deleteButton.disabled = state.notebooks.length === 1;
+            deleteButton.addEventListener('click', event => {
+              event.stopPropagation();
+              requestNotebookDeletion(notebook.id);
+            });
+            wrapper.append(tile, deleteButton);
+            notebookGrid.appendChild(wrapper);
           });
         }
 
@@ -1473,6 +1573,8 @@
           state.currentPageId = notebook.pages[state.activePageIndex].id;
           notebookTitle.textContent = notebook.title;
           pageCounter.textContent = `${state.activePageIndex + 1} / ${notebook.pages.length} ページ`;
+          deletePageBtn.disabled = notebook.pages.length <= 1;
+          deletePageBtn.title = notebook.pages.length <= 1 ? '最後の1ページは削除できません' : '現在のページを削除';
           pageStage.replaceChildren();
           notebook.pages.forEach((page, index) => {
             const card = document.createElement('article');
@@ -1519,6 +1621,7 @@
           state.activePageIndex = Math.max(0, Math.min(index, notebook.pages.length - 1));
           state.currentPageId = notebook.pages[state.activePageIndex].id;
           pageCounter.textContent = `${state.activePageIndex + 1} / ${notebook.pages.length} ページ`;
+          deletePageBtn.disabled = notebook.pages.length <= 1;
           updatePageTransforms(0);
           scheduleLibrarySave();
         }
@@ -1530,11 +1633,64 @@
           setViewMode('editing');
         }
 
+        let pendingConfirmAction = null;
+
+        function openConfirmDialog(title, message, action) {
+          pendingConfirmAction = action;
+          confirmTitle.textContent = title;
+          confirmMessage.textContent = message;
+          confirmModal.classList.add('open');
+          confirmModal.setAttribute('aria-hidden', 'false');
+          confirmDeleteBtn.focus({ preventScroll: true });
+        }
+
+        function closeConfirmDialog() {
+          pendingConfirmAction = null;
+          confirmModal.classList.remove('open');
+          confirmModal.setAttribute('aria-hidden', 'true');
+        }
+
+        function requestNotebookDeletion(notebookId) {
+          if (state.notebooks.length <= 1) return;
+          const notebook = state.notebooks.find(item => item.id === notebookId);
+          if (!notebook) return;
+          openConfirmDialog('ノートを削除', `「${notebook.title}」とその全ページを削除します。\nこの操作は取り消せません。`, () => {
+            notebook.pages.forEach(page => deletedPageIds.add(page.id));
+            deletedNotebookIds.add(notebook.id);
+            state.notebooks = state.notebooks.filter(item => item.id !== notebook.id);
+            if (state.currentNotebookId === notebook.id) {
+              state.currentNotebookId = state.notebooks[0].id;
+              state.currentPageId = state.notebooks[0].pages[0].id;
+              state.activePageIndex = 0;
+            }
+            saveLibraryNow();
+            renderHome();
+            scheduleAuthorizedAutoSync(150);
+          });
+        }
+
+        function requestActivePageDeletion() {
+          const notebook = state.currentNotebook;
+          if (!notebook || notebook.pages.length <= 1) return;
+          const pageIndex = state.activePageIndex;
+          const page = notebook.pages[pageIndex];
+          openConfirmDialog('ページを削除', `${pageIndex + 1}ページ目を削除します。\nこの操作は取り消せません。`, () => {
+            deletedPageIds.add(page.id);
+            notebook.pages.splice(pageIndex, 1);
+            state.activePageIndex = Math.min(pageIndex, notebook.pages.length - 1);
+            state.currentPageId = notebook.pages[state.activePageIndex].id;
+            saveLibraryNow();
+            renderNotebook();
+            scheduleAuthorizedAutoSync(150);
+          });
+        }
+
         function closeEditingViaPinch() {
           state.camera.zoom = .4;
           state.activeTouches.clear();
           showToast('ページを閉じました', '📖');
           setViewMode('notebook');
+          scheduleAuthorizedAutoSync(350);
         }
 
         // --- キャンバスのサイズ調整 ---
@@ -2862,9 +3018,21 @@
           setViewMode('notebook');
         });
 
+        confirmCancelBtn.addEventListener('click', closeConfirmDialog);
+        confirmModal.addEventListener('pointerdown', event => {
+          if (event.target === confirmModal) closeConfirmDialog();
+        });
+        confirmDeleteBtn.addEventListener('click', () => {
+          const action = pendingConfirmAction;
+          closeConfirmDialog();
+          if (action) action();
+        });
+
         backToHomeBtn.addEventListener('click', () => setViewMode('home'));
         closeEditorBtn.addEventListener('click', () => setViewMode('notebook'));
+        closeEditorBtn.addEventListener('click', () => scheduleAuthorizedAutoSync(350));
         openPageBtn.addEventListener('click', openActivePage);
+        deletePageBtn.addEventListener('click', requestActivePageDeletion);
         addPageBtn.addEventListener('click', () => {
           const notebook = state.currentNotebook;
           if (!notebook) return;
@@ -2877,9 +3045,25 @@
         });
 
         let pageDrag = null;
+        let pageFlingTimer = null;
+
+        function animatePageFling(targetIndex) {
+          const notebook = state.currentNotebook;
+          if (!notebook) return;
+          const target = Math.max(0, Math.min(targetIndex, notebook.pages.length - 1));
+          clearTimeout(pageFlingTimer);
+          const advance = () => {
+            if (state.activePageIndex === target) return;
+            selectPage(state.activePageIndex + Math.sign(target - state.activePageIndex));
+            pageFlingTimer = setTimeout(advance, 68);
+          };
+          advance();
+        }
+
         pageStage.addEventListener('pointerdown', (event) => {
           if (event.pointerType === 'mouse' && event.button !== 0) return;
           event.preventDefault();
+          clearTimeout(pageFlingTimer);
           pageDrag = {
             id: event.pointerId,
             startX: event.clientX,
@@ -2903,11 +3087,17 @@
           const deltaX = event.clientX - drag.startX;
           const elapsed = Math.max(1, performance.now() - drag.startTime);
           const velocity = deltaX / elapsed;
-          if (deltaX < -55 || velocity < -.55) selectPage(state.activePageIndex + 1);
-          else if (deltaX > 55 || velocity > .55) selectPage(state.activePageIndex - 1);
-          else {
+          const distance = Math.abs(deltaX);
+          const speed = Math.abs(velocity);
+          if (distance >= 22 || speed >= .16) {
+            const projectedDistance = distance + speed * 260;
+            let pageCount = Math.max(1, Math.min(5, Math.round(projectedDistance / 85)));
+            if (speed >= 1.35) pageCount = Math.max(pageCount, 4);
+            const direction = deltaX < 0 ? 1 : -1;
+            animatePageFling(state.activePageIndex + direction * pageCount);
+          } else {
             updatePageTransforms(0);
-            if (Math.abs(deltaX) < 10 && drag.tappedActiveCard) openActivePage();
+            if (distance < 8 && drag.tappedActiveCard) openActivePage();
           }
         };
         pageStage.addEventListener('pointerup', finishPageDrag);
