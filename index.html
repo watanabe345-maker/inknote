@@ -1,0 +1,3114 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>Handwriting Note Gestures</title>
+    <meta name="description" content="iPad (Apple Pencil) と Galaxy Z Fold (Sペン) に最適化されたジェスチャー対応ベクター手書きノート" />
+    <meta property="og:title" content="Handwriting Note Gestures" />
+    <meta property="og:description" content="iPad (Apple Pencil) と Galaxy Z Fold (Sペン) に最適化されたジェスチャー対応ベクター手書きノート" />
+    <meta property="og:type" content="website" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="theme-color" content="#17232d" />
+    <script src="https://accounts.google.com/gsi/client" async defer></script>
+    <script src="https://apis.google.com/js/api.js" async defer></script>
+    <style>
+      :root {
+        --bg-color: #f6f7f9;
+        --paper-grid: #e2e8f0;
+        --text-primary: #1e293b;
+        --text-secondary: #64748b;
+        --accent-blue: #2563eb;
+        --accent-red: #ef4444;
+        --accent-emerald: #10b981;
+        --accent-purple: #8b5cf6;
+        --border-color: #cbd5e1;
+        --card-bg: rgba(255, 255, 255, 0.94);
+      }
+
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+        -webkit-tap-highlight-color: transparent;
+      }
+
+      html, body {
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background-color: var(--bg-color);
+        color: var(--text-primary);
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Hiragino Kaku Gothic ProN", "BIZ UDPGothic", Meiryo, sans-serif;
+        touch-action: none !important;
+        -webkit-touch-callout: none;
+        -webkit-user-select: none;
+        user-select: none;
+        overscroll-behavior: none;
+      }
+
+      /* ノートの方眼紙キャンバス背景 */
+      #appContainer {
+        position: relative;
+        width: 100vw;
+        height: 100vh;
+        overflow: hidden;
+        background-color: #ffffff;
+        background-image: 
+          linear-gradient(to right, var(--paper-grid) 1px, transparent 1px),
+          linear-gradient(to bottom, var(--paper-grid) 1px, transparent 1px);
+        background-size: 28px 28px;
+      }
+
+      /* 描画・ジェスチャー用キャンバス */
+      canvas {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        display: block;
+        touch-action: none;
+      }
+
+      #inkCanvas {
+        z-index: 1;
+      }
+
+      #overlayCanvas {
+        z-index: 2;
+        pointer-events: none;
+      }
+
+      /* トップツールバー */
+      #topToolbar {
+        position: absolute;
+        top: 12px;
+        left: 50%;
+        transform: translateX(-50%);
+        z-index: 10;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        background: var(--card-bg);
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        padding: 6px 12px;
+        border-radius: 16px;
+        border: 1px solid rgba(203, 213, 225, 0.8);
+        box-shadow: 0 4px 18px rgba(0, 0, 0, 0.07);
+        max-width: 95vw;
+        overflow-x: auto;
+      }
+
+      .tool-btn-group {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+      }
+
+      .tool-btn {
+        appearance: none;
+        border: 1px solid transparent;
+        background: transparent;
+        color: var(--text-primary);
+        padding: 6px 10px;
+        border-radius: 10px;
+        font-size: 13px;
+        font-weight: 500;
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+        height: 36px;
+        min-width: 36px;
+        transition: all 0.15s ease;
+      }
+
+      .tool-btn:hover {
+        background: rgba(241, 245, 249, 0.9);
+      }
+
+      .tool-btn:active {
+        background: #e2e8f0;
+        transform: scale(0.96);
+      }
+
+      .tool-btn:disabled {
+        opacity: 0.35;
+        cursor: not-allowed;
+      }
+
+      .tool-btn.active {
+        background: #e0f2fe;
+        color: #0284c7;
+        border-color: #bae6fd;
+      }
+
+      .tool-separator {
+        width: 1px;
+        height: 22px;
+        background: #cbd5e1;
+        margin: 0 4px;
+      }
+
+      /* カラーパレット */
+      .color-dot {
+        width: 20px;
+        height: 20px;
+        border-radius: 50%;
+        border: 2px solid transparent;
+        cursor: pointer;
+        transition: transform 0.15s ease, border-color 0.15s ease;
+      }
+      .color-dot.active {
+        transform: scale(1.25);
+        border-color: #0f172a;
+        box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.9);
+      }
+
+      /* 線幅セレクター */
+      .width-pill {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 28px;
+        height: 28px;
+        border-radius: 8px;
+        cursor: pointer;
+        background: #f1f5f9;
+        border: 1px solid transparent;
+      }
+      .width-pill.active {
+        background: #0f172a;
+      }
+      .width-pill.active .line-indicator {
+        background: #ffffff;
+      }
+      .line-indicator {
+        background: #334155;
+        border-radius: 9999px;
+      }
+
+      /* 右上：補助なげなわ消去フローティングボタン（ペンボタン未対応環境用） */
+      #lassoEraserToggle {
+        position: absolute;
+        top: 14px;
+        right: 14px;
+        z-index: 10;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        background: var(--card-bg);
+        border: 1px solid var(--border-color);
+        backdrop-filter: blur(10px);
+        padding: 8px 14px;
+        border-radius: 12px;
+        box-shadow: 0 4px 14px rgba(0, 0, 0, 0.08);
+        cursor: pointer;
+        font-size: 13px;
+        font-weight: 600;
+        color: #475569;
+        transition: all 0.2s ease;
+      }
+
+      #lassoEraserToggle.active {
+        background: #fef2f2;
+        border-color: #f87171;
+        color: #dc2626;
+        box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.2), 0 4px 14px rgba(239, 68, 68, 0.15);
+      }
+
+      /* 画面下部ステータス＆ジェスチャーモニター */
+      #statusBar {
+        position: absolute;
+        bottom: 12px;
+        left: 14px;
+        z-index: 10;
+        background: rgba(15, 23, 42, 0.88);
+        color: #f8fafc;
+        backdrop-filter: blur(8px);
+        padding: 6px 12px;
+        border-radius: 10px;
+        font-size: 11px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        pointer-events: none;
+        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.15);
+      }
+
+      .status-tag {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+      }
+      .status-indicator-dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: #10b981;
+      }
+
+      /* 2本指シミュレーター（PC/単一タッチ環境テスト用） */
+      #twoFingerSimToggle {
+        position: absolute;
+        bottom: 12px;
+        right: 14px;
+        z-index: 10;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        background: var(--card-bg);
+        border: 1px solid var(--border-color);
+        padding: 6px 12px;
+        border-radius: 10px;
+        font-size: 12px;
+        cursor: pointer;
+        color: #475569;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+      }
+      #twoFingerSimToggle.active {
+        background: #ecfdf5;
+        border-color: #34d399;
+        color: #059669;
+        font-weight: 600;
+      }
+
+      /* 選択アクションバー（ストローク選択時にフロート表示） */
+      #selectionActionBar {
+        position: absolute;
+        bottom: 56px;
+        left: 50%;
+        transform: translateX(-50%) translateY(20px);
+        opacity: 0;
+        pointer-events: none;
+        z-index: 15;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        background: #0f172a;
+        color: #ffffff;
+        padding: 8px 16px;
+        border-radius: 14px;
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+        transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+      }
+
+      #selectionActionBar.visible {
+        opacity: 1;
+        pointer-events: auto;
+        transform: translateX(-50%) translateY(0);
+      }
+
+      .selection-btn {
+        background: rgba(255, 255, 255, 0.15);
+        color: #ffffff;
+        border: none;
+        padding: 6px 12px;
+        border-radius: 8px;
+        font-size: 12px;
+        font-weight: 500;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        gap: 4px;
+      }
+      .selection-btn:hover {
+        background: rgba(255, 255, 255, 0.25);
+      }
+      .selection-btn.danger {
+        background: #ef4444;
+      }
+      .selection-btn.danger:hover {
+        background: #dc2626;
+      }
+
+      /* トースト通知 */
+      #toastContainer {
+        position: absolute;
+        top: 68px;
+        left: 50%;
+        transform: translateX(-50%);
+        z-index: 20;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 6px;
+        pointer-events: none;
+      }
+
+      .toast {
+        background: rgba(15, 23, 42, 0.92);
+        color: #ffffff;
+        backdrop-filter: blur(8px);
+        padding: 8px 16px;
+        border-radius: 9999px;
+        font-size: 13px;
+        font-weight: 500;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+        animation: toastIn 0.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+      }
+
+      @keyframes toastIn {
+        from {
+          opacity: 0;
+          transform: translateY(-8px) scale(0.96);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0) scale(1);
+        }
+      }
+
+      /* ガイドモーダル */
+      #guideModal {
+        position: fixed;
+        inset: 0;
+        z-index: 100;
+        background: rgba(15, 23, 42, 0.5);
+        backdrop-filter: blur(4px);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 16px;
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.2s ease;
+      }
+      #guideModal.open {
+        opacity: 1;
+        pointer-events: auto;
+      }
+      .modal-card {
+        background: #ffffff;
+        border-radius: 18px;
+        padding: 24px;
+        max-width: 540px;
+        width: 100%;
+        box-shadow: 0 20px 40px rgba(0, 0, 0, 0.2);
+        border: 1px solid var(--border-color);
+      }
+      .modal-title {
+        font-size: 18px;
+        font-weight: 700;
+        color: #0f172a;
+        margin-bottom: 12px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+      .gesture-item {
+        display: flex;
+        gap: 12px;
+        margin-bottom: 14px;
+        padding-bottom: 12px;
+        border-bottom: 1px solid #f1f5f9;
+      }
+      .gesture-icon {
+        font-size: 22px;
+        width: 36px;
+        height: 36px;
+        background: #f8fafc;
+        border-radius: 10px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+      }
+      .gesture-name {
+        font-weight: 600;
+        font-size: 14px;
+        color: #1e293b;
+      }
+      .gesture-desc {
+        font-size: 12.5px;
+        color: #64748b;
+        line-height: 1.45;
+        margin-top: 2px;
+      }
+
+      /* スワイプジェスチャー用HUD */
+      #swipeHud {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%) scale(0.85);
+        opacity: 0;
+        pointer-events: none;
+        z-index: 30;
+        background: rgba(15, 23, 42, 0.9);
+        color: #ffffff;
+        padding: 16px 28px;
+        border-radius: 20px;
+        font-size: 18px;
+        font-weight: 600;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        backdrop-filter: blur(12px);
+        box-shadow: 0 12px 36px rgba(0,0,0,0.3);
+        transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+      }
+      #swipeHud.show {
+        opacity: 1;
+        transform: translate(-50%, -50%) scale(1);
+      }
+
+      /* Phase 2: ノートライブラリ / 3Dページブラウザ */
+      .view-layer {
+        position: fixed;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        transition: opacity .28s ease, transform .35s cubic-bezier(.2,.8,.2,1);
+      }
+      .view-layer[hidden] { display: none !important; }
+      #homeView, #notebookView {
+        z-index: 80;
+        overflow: hidden;
+        color: #f8fafc;
+        background:
+          radial-gradient(circle at 18% 12%, rgba(255,255,255,.12), transparent 28%),
+          linear-gradient(145deg, #263544 0%, #17232d 55%, #101920 100%);
+        touch-action: none;
+      }
+      .library-header, .notebook-header {
+        height: max(86px, calc(68px + env(safe-area-inset-top)));
+        padding: max(18px, env(safe-area-inset-top)) clamp(18px, 5vw, 64px) 14px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        position: relative;
+        z-index: 4;
+      }
+      .library-title { font-size: clamp(26px, 4vw, 42px); font-weight: 750; letter-spacing: -.04em; }
+      .library-subtitle { color: #a8b4bf; font-size: 13px; margin-top: 3px; }
+      .phase2-btn {
+        border: 1px solid rgba(255,255,255,.18);
+        color: #fff;
+        background: rgba(255,255,255,.11);
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        border-radius: 999px;
+        min-height: 44px;
+        padding: 10px 18px;
+        font: inherit;
+        font-weight: 650;
+        cursor: pointer;
+      }
+      .phase2-btn:active { transform: scale(.96); background: rgba(255,255,255,.2); }
+      .phase2-btn:disabled { opacity:.5; cursor:wait; }
+      .library-actions { display:flex; align-items:center; gap:9px; flex-wrap:wrap; justify-content:flex-end; }
+      #cloudSyncBtn.syncing { opacity:.72; cursor:progress; }
+      #notebookGrid {
+        height: calc(100% - max(86px, calc(68px + env(safe-area-inset-top))));
+        overflow-y: auto;
+        touch-action: pan-y;
+        padding: 24px clamp(22px, 6vw, 84px) 80px;
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(min(180px, 42vw), 1fr));
+        align-content: start;
+        gap: clamp(24px, 5vw, 54px);
+      }
+      .notebook-tile { background: none; border: 0; color: inherit; text-align: left; cursor: pointer; min-width: 0; }
+      .notebook-cover {
+        aspect-ratio: 4 / 5;
+        border-radius: 7px 16px 16px 7px;
+        position: relative;
+        box-shadow: -7px 9px 0 rgba(0,0,0,.16), 0 24px 38px rgba(0,0,0,.3);
+        transition: transform .25s ease, box-shadow .25s ease;
+        overflow: hidden;
+      }
+      .notebook-tile:active .notebook-cover { transform: translateY(3px) rotateY(-4deg); }
+      .notebook-cover::before { content:""; position:absolute; inset:0 auto 0 0; width:12%; background:rgba(0,0,0,.16); box-shadow:inset -1px 0 rgba(255,255,255,.2); }
+      .notebook-cover::after { content:""; position:absolute; inset:8% 9% auto 16%; height:26%; border:1px solid rgba(255,255,255,.28); border-radius:4px; background:rgba(255,255,255,.1); }
+      .notebook-name { font-size: 16px; font-weight: 700; margin-top: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .notebook-meta { color:#9facb8; font-size:12px; margin-top:4px; }
+      #emptyLibrary { grid-column:1/-1; color:#a8b4bf; text-align:center; padding:14vh 20px; }
+
+      .notebook-header { position:absolute; inset:0 0 auto; }
+      .notebook-header-center { position:absolute; left:50%; transform:translateX(-50%); text-align:center; max-width:46vw; }
+      #notebookTitle { font-size:18px; font-weight:750; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+      #pageCounter { color:#a8b4bf; font-size:12px; margin-top:3px; }
+      #pageStage {
+        position:absolute;
+        inset:max(96px, calc(78px + env(safe-area-inset-top))) 0 max(82px, calc(66px + env(safe-area-inset-bottom)));
+        perspective:1200px;
+        perspective-origin:50% 45%;
+        transform-style:preserve-3d;
+        touch-action:none;
+      }
+      .page-card {
+        position:absolute;
+        left:50%; top:50%;
+        width:min(62vw, 640px);
+        height:min(70vh, 820px);
+        transform-origin:center center;
+        background-color:#fff;
+        background-image:linear-gradient(to right,#e2e8f0 1px,transparent 1px),linear-gradient(to bottom,#e2e8f0 1px,transparent 1px);
+        background-size:20px 20px;
+        border-radius:5px 13px 13px 5px;
+        box-shadow:0 24px 52px rgba(0,0,0,.35);
+        overflow:hidden;
+        transition:transform .3s ease, opacity .3s ease, filter .3s ease;
+        will-change:transform;
+        backface-visibility:hidden;
+      }
+      .page-card img { width:100%; height:100%; display:block; object-fit:contain; background:transparent; pointer-events:none; }
+      .page-card-number { position:absolute; right:18px; bottom:14px; color:#94a3b8; font:600 12px/1 system-ui; }
+      .page-card.active { cursor:pointer; }
+      #notebookFooter { position:absolute; left:0; right:0; bottom:max(18px, env(safe-area-inset-bottom)); z-index:5; display:flex; justify-content:center; gap:10px; }
+      #flipHint { position:absolute; bottom:max(70px, calc(56px + env(safe-area-inset-bottom))); left:50%; transform:translateX(-50%); color:#93a2ae; font-size:12px; white-space:nowrap; }
+
+      #appContainer[hidden] { display:none !important; }
+      #closeEditorBtn {
+        position:absolute; top:max(12px, env(safe-area-inset-top)); left:14px; z-index:20;
+        border:1px solid rgba(203,213,225,.85); background:rgba(255,255,255,.94); color:#334155;
+        min-width:44px; height:44px; padding:0 14px; border-radius:14px; font:650 13px/1 system-ui;
+        box-shadow:0 4px 16px rgba(15,23,42,.1); cursor:pointer;
+      }
+      #editingPageLabel { display:none; }
+      @media (max-width:700px) {
+        .page-card { width:min(76vw, 520px); height:min(64vh, 700px); }
+        .notebook-header-center { max-width:40vw; }
+        #topToolbar { left:72px; right:10px; transform:none; max-width:none; }
+        #lassoEraserToggle { top:62px; }
+        #lassoEraserToggle span { display:none; }
+        #statusBar { max-width:calc(100vw - 28px); overflow:hidden; }
+      }
+      @media (max-width:480px) {
+        .page-card { width:80vw; height:58vh; }
+        .phase2-btn { padding:9px 13px; font-size:13px; }
+        .library-subtitle, #flipHint { display:none; }
+      }
+      @media (prefers-reduced-motion:reduce) { .page-card, .view-layer { transition-duration:.01ms !important; } }
+
+      #newNotebookModal {
+        position: fixed;
+        inset: 0;
+        z-index: 200;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 20px;
+        background: rgba(8, 15, 22, .58);
+        backdrop-filter: blur(9px);
+        -webkit-backdrop-filter: blur(9px);
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity .2s ease;
+        touch-action: manipulation;
+      }
+      #newNotebookModal.open { opacity: 1; pointer-events: auto; }
+      .new-notebook-card {
+        width: min(430px, 100%);
+        padding: 24px;
+        border-radius: 22px;
+        background: #fff;
+        color: #17202a;
+        box-shadow: 0 28px 70px rgba(0,0,0,.38);
+        transform: translateY(10px) scale(.98);
+        transition: transform .24s cubic-bezier(.2,.8,.2,1);
+      }
+      #newNotebookModal.open .new-notebook-card { transform: translateY(0) scale(1); }
+      .new-notebook-card h2 { font-size: 21px; letter-spacing: -.02em; margin-bottom: 6px; }
+      .new-notebook-card p { color: #64748b; font-size: 13px; line-height: 1.5; margin-bottom: 18px; }
+      #newNotebookName {
+        display: block;
+        width: 100%;
+        min-height: 50px;
+        padding: 11px 14px;
+        border: 2px solid #cbd5e1;
+        border-radius: 13px;
+        outline: none;
+        color: #0f172a;
+        background: #fff;
+        font: 600 16px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        user-select: text;
+        -webkit-user-select: text;
+        touch-action: manipulation;
+      }
+      #newNotebookName:focus { border-color: #2563eb; box-shadow: 0 0 0 4px rgba(37,99,235,.12); }
+      .new-notebook-actions { display:flex; justify-content:flex-end; gap:9px; margin-top:20px; }
+      .dialog-btn {
+        min-height: 44px;
+        padding: 10px 17px;
+        border: 0;
+        border-radius: 12px;
+        font: 700 14px/1 system-ui;
+        cursor: pointer;
+        touch-action: manipulation;
+      }
+      .dialog-btn.secondary { color:#475569; background:#eef2f6; }
+      .dialog-btn.primary { color:#fff; background:#2563eb; }
+      .dialog-btn:active { transform: scale(.97); }
+    </style>
+  </head>
+  <body>
+    <section id="homeView" class="view-layer" aria-label="ノート一覧">
+      <header class="library-header">
+        <div><div class="library-title">InkNote</div><div class="library-subtitle">あなたのノートライブラリ</div></div>
+        <div class="library-actions">
+          <button id="cloudSyncBtn" class="phase2-btn" type="button" disabled title="Google Drive と同期">☁️ 同期準備中…</button>
+          <button id="createNotebookBtn" class="phase2-btn" type="button">＋ 新規ノート</button>
+        </div>
+      </header>
+      <main id="notebookGrid"></main>
+    </section>
+
+    <section id="notebookView" class="view-layer" aria-label="ページ一覧" hidden>
+      <header class="notebook-header">
+        <button id="backToHomeBtn" class="phase2-btn" type="button">‹ 本棚</button>
+        <div class="notebook-header-center"><div id="notebookTitle"></div><div id="pageCounter"></div></div>
+        <button id="addPageBtn" class="phase2-btn" type="button">＋ ページ</button>
+      </header>
+      <div id="pageStage" aria-label="左右にスワイプしてページをめくる"></div>
+      <div id="flipHint">左右にスワイプでページをめくる · タップで編集</div>
+      <footer id="notebookFooter"><button id="openPageBtn" class="phase2-btn" type="button">このページを編集</button></footer>
+    </section>
+
+    <div id="newNotebookModal" role="dialog" aria-modal="true" aria-labelledby="newNotebookTitle" aria-hidden="true">
+      <form id="newNotebookForm" class="new-notebook-card" autocomplete="off">
+        <h2 id="newNotebookTitle">新しいノート</h2>
+        <p>ノート名はあとで変更できます。</p>
+        <label for="newNotebookName" style="display:block;font-size:13px;font-weight:700;margin-bottom:7px;">ノート名</label>
+        <input id="newNotebookName" name="notebookName" type="text" maxlength="60" enterkeyhint="done" required />
+        <div class="new-notebook-actions">
+          <button id="cancelNotebookBtn" class="dialog-btn secondary" type="button">キャンセル</button>
+          <button class="dialog-btn primary" type="submit">作成</button>
+        </div>
+      </form>
+    </div>
+
+    <div id="appContainer" class="view-layer" hidden>
+      <button id="closeEditorBtn" type="button">‹ 閉じる</button>
+      <!-- 手書き線キャンバス -->
+      <canvas id="inkCanvas"></canvas>
+      <!-- ジェスチャー軌跡・選択表示用オーバーレイ -->
+      <canvas id="overlayCanvas"></canvas>
+
+      <!-- 上部ツールバー -->
+      <header id="topToolbar">
+        <div style="font-weight: 700; font-size: 13px; color: #0f172a; margin-right: 4px; display: flex; align-items: center; gap: 4px;">
+          <span style="display:inline-block; width:10px; height:10px; border-radius:50%; background:#2563eb;"></span>
+          <span>InkNote</span>
+        </div>
+
+        <div class="tool-separator"></div>
+
+        <!-- ペン種別選択 -->
+        <div class="tool-btn-group" id="penTypeGroup">
+          <div class="width-pill active" data-type="normal" title="通常ペン">🖊️</div>
+          <div class="width-pill" data-type="marker" title="マーカー">🖍️</div>
+        </div>
+
+        <div class="tool-separator"></div>
+
+        <!-- カラー選択 -->
+        <div class="tool-btn-group" id="colorPickerGroup">
+          <div class="color-dot active" data-color="#1e293b" style="background:#1e293b;" title="黒墨 (Black)"></div>
+          <div class="color-dot" data-color="#2563eb" style="background:#2563eb;" title="青 (Blue)"></div>
+          <div class="color-dot" data-color="#dc2626" style="background:#dc2626;" title="赤 (Red)"></div>
+          <div class="color-dot" data-color="#16a34a" style="background:#16a34a;" title="緑 (Green)"></div>
+          <div class="color-dot" data-color="#ca8a04" style="background:#ca8a04;" title="黄土 (Amber)"></div>
+        </div>
+
+        <div class="tool-separator"></div>
+
+        <!-- 線幅選択 -->
+        <div class="tool-btn-group" id="widthPickerGroup">
+          <div class="width-pill" data-width="1.8" title="極細 (1.8px)">
+            <div class="line-indicator" style="width: 14px; height: 1.8px;"></div>
+          </div>
+          <div class="width-pill active" data-width="3.2" title="標準 (3.2px)">
+            <div class="line-indicator" style="width: 14px; height: 3.2px;"></div>
+          </div>
+          <div class="width-pill" data-width="6.0" title="太字 (6.0px)">
+            <div class="line-indicator" style="width: 14px; height: 6px;"></div>
+          </div>
+          <div class="width-pill" data-width="24.0" title="マーカー極太 (24px)">
+            <div class="line-indicator" style="width: 14px; height: 12px; border-radius: 2px;"></div>
+          </div>
+        </div>
+
+        <div class="tool-separator"></div>
+
+        <!-- 筆圧感知切り替え -->
+        <button class="tool-btn active" id="pressureToggle" title="筆圧感知 (Pressure Sensitivity)">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m18 2 4 4-12 12H6v-4L18 2z"/><path d="m14 6 4 4"/></svg>
+          <span>筆圧</span>
+        </button>
+
+        <div class="tool-separator"></div>
+
+        <!-- Undo / Redo -->
+        <button class="tool-btn" id="undoBtn" title="元に戻す (Undo: 2本指左スワイプ)" disabled>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5a5.5 5.5 0 0 1-5.5 5.5H11"/></svg>
+        </button>
+        <button class="tool-btn" id="redoBtn" title="やり直す (Redo: 2本指右スワイプ)" disabled>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 14 5-5-5-5"/><path d="M20 9H9.5A5.5 5.5 0 0 0 4 14.5A5.5 5.5 0 0 0 9.5 20H13"/></svg>
+        </button>
+
+        <div class="tool-separator"></div>
+
+        <!-- クリア & 保存 & ガイド -->
+        <button class="tool-btn" id="clearBtn" title="すべて消去">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
+        </button>
+
+        <button class="tool-btn" id="exportBtn" title="PNG画像として書き出し">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        </button>
+
+        <button class="tool-btn" id="helpBtn" title="Supernote風ジェスチャーの使い方">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></svg>
+          <span>操作ガイド</span>
+        </button>
+      </header>
+
+      <!-- 右上：なげなわ消去モード手動トグルボタン（Sペンボタン/Apple Pencil未対応環境の補助） -->
+      <button id="lassoEraserToggle" title="スタイラスのサイドボタンを押すか、このボタンでなげなわ消去">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v18"/><path d="m19 9-7 7-7-7"/></svg>
+        <span>なげなわ消去モード</span>
+      </button>
+
+      <!-- 選択ストロークの操作フローティングバー -->
+      <div id="selectionActionBar">
+        <span id="selectionCountText" style="font-size: 13px; font-weight: 600; margin-right: 4px;">1件選択中</span>
+        <button class="selection-btn" id="selectionDeselectBtn">
+          選択解除
+        </button>
+        <button class="selection-btn danger" id="selectionDeleteBtn">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/></svg>
+          削除
+        </button>
+      </div>
+
+      <!-- 下部ステータスモニター（リアルタイム入力監視） -->
+      <div id="statusBar">
+        <div class="status-tag">
+          <span class="status-indicator-dot" id="pointerStatusDot"></span>
+          <span id="pointerTypeText">待機中</span>
+        </div>
+        <div class="status-tag">
+          <span>筆圧:</span>
+          <span id="pressureText" style="width: 32px;">0.00</span>
+        </div>
+        <div class="status-tag">
+          <span>ボタン:</span>
+          <span id="buttonsText">0</span>
+        </div>
+        <div class="status-tag">
+          <span>タッチ:</span>
+          <span id="touchCountText">0本</span>
+        </div>
+        <div class="status-tag" style="color: #60a5fa;">
+          <span>状態:</span>
+          <span id="modeStatusText">ペン描画</span>
+        </div>
+      </div>
+
+      <!-- 2本指シミュレーター（マウスや単一ポインタ環境でテスト用） -->
+      <button id="twoFingerSimToggle" title="PCマウスで「2本指タップ＋囲み選択」や「スワイプ」をテスト">
+        <span>✌️ 2本指ホールド（テスト用）</span>
+      </button>
+
+      <!-- 2本指スワイプHUD -->
+      <div id="swipeHud">
+        <span id="swipeHudIcon">↩</span>
+        <span id="swipeHudText">Undo (元に戻す)</span>
+      </div>
+
+      <!-- トースト通知コンテナ -->
+      <div id="toastContainer"></div>
+
+      <!-- ジェスチャーガイドモーダル -->
+      <div id="guideModal">
+        <div class="modal-card">
+          <div class="modal-title">
+            <span>Supernote風ジェスチャー操作</span>
+            <button id="closeGuideBtn" style="border:none; background:none; font-size:22px; cursor:pointer; color:#94a3b8;">&times;</button>
+          </div>
+          
+          <div class="gesture-item">
+            <div class="gesture-icon">⚡</div>
+            <div>
+              <div class="gesture-name">1. スクラッチ（ジグザグ）消去</div>
+              <div class="gesture-desc">書いた線の上を素早くペンでジグザグ（左右/上下に往復）に擦ると、交差しているストロークを自動検知して丸ごと消去します。</div>
+            </div>
+          </div>
+
+          <div class="gesture-item">
+            <div class="gesture-icon">⭕</div>
+            <div>
+              <div class="gesture-name">2. なげなわ消去（ペンボタン検知）</div>
+              <div class="gesture-desc">Sペンのサイドボタン（またはApple Pencil Proのスクイーズ / 画面右上のトグル）を押しながら線で囲むと、囲まれたストロークを一括削除します。</div>
+            </div>
+          </div>
+
+          <div class="gesture-item">
+            <div class="gesture-icon">✌️</div>
+            <div>
+              <div class="gesture-name">3. 2本指スワイプで Undo / Redo</div>
+              <div class="gesture-desc">2本の指で画面を左へスワイプすると Undo（1つ戻る）、右へスワイプすると Redo（1つ進む）が実行されます。</div>
+            </div>
+          </div>
+
+          <div class="gesture-item" style="border-bottom:none; margin-bottom:0; padding-bottom:0;">
+            <div class="gesture-icon">✨</div>
+            <div>
+              <div class="gesture-name">4. 2本指タップ＋囲み選択</div>
+              <div class="gesture-desc">片手の2本指で画面を押さえたままペンでストロークを囲むと、ストロークが選択（ハイライト）され、ドラッグ移動や一括削除が可能です。</div>
+            </div>
+          </div>
+
+          <div style="margin-top: 18px; text-align: right;">
+            <button id="confirmGuideBtn" style="background:#2563eb; color:#fff; border:none; padding:8px 18px; border-radius:10px; font-weight:600; cursor:pointer;">理解しました</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- コアモジュールスクリプト（完全スタンドアロン） -->
+    <script>
+      (function() {
+        'use strict';
+
+        // --- 状態定義 ---
+        const makeId = (prefix) => `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+        const makePage = () => ({ id: makeId('page'), strokes: [], undoStack: [], redoStack: [], thumbnail: null });
+        const initialPage = makePage();
+        const initialNotebook = {
+          id: makeId('notebook'),
+          title: 'マイノート',
+          coverColor: '#315f72',
+          pages: [initialPage]
+        };
+        const state = {
+          // Phase 2: ノートブック > ページの階層構造
+          notebooks: [initialNotebook],
+          currentNotebookId: initialNotebook.id,
+          currentPageId: initialPage.id,
+          viewMode: 'home', // 'home' | 'notebook' | 'editing'
+          activePageIndex: 0,
+          penSettings: {
+            normal: { color: '#1e293b', width: 3.2 },
+            marker: { color: '#ca8a04', width: 24.0 }
+          },
+          twoFingerCancelTime: 0,
+          color: '#1e293b',
+          baseWidth: 3.2,
+          penType: 'normal',
+          usePressure: true,
+          isLassoEraserModeToggle: false,
+          isTwoFingerSimulated: false,
+          // 入力追跡
+          camera: { x: 0, y: 0, zoom: 1 },
+          initialPinchDist: null,
+          initialCamera: null,
+          activeTouches: new Map(), // pointerId -> { id, x, y, startX, startY, startTime }
+          activePenId: null,
+          currentPenPoints: [], // { x, y, pressure, time }
+          currentMode: 'idle', // 'idle' | 'pen_draw' | 'lasso_erase' | 'lasso_select' | 'two_finger_swipe' | 'dragging_selection'
+          // 既存コアの state.strokes 等は、現在ページへの透過的なアクセサとして維持する
+          get currentNotebook() { return this.notebooks.find(n => n.id === this.currentNotebookId) || null; },
+          get currentPage() { return this.currentNotebook?.pages.find(p => p.id === this.currentPageId) || null; },
+          get strokes() { return this.currentPage?.strokes || []; },
+          set strokes(value) { if (this.currentPage) this.currentPage.strokes = value; },
+          get undoStack() { return this.currentPage?.undoStack || []; },
+          set undoStack(value) { if (this.currentPage) this.currentPage.undoStack = value; },
+          get redoStack() { return this.currentPage?.redoStack || []; },
+          set redoStack(value) { if (this.currentPage) this.currentPage.redoStack = value; },
+          // 選択中ストローク
+          selectedStrokeIds: new Set(),
+          dragStartPos: null,
+          dragOriginalPositions: null,
+          // スワイプ判定用
+          swipeTriggered: false,
+          twoFingerStartCenter: null,
+          // アニメーション用
+          scratchFlashEffect: null, // { bbox, time, duration }
+          // 図形補正（QuickShape）用
+          holdTimer: null,
+          holdAnchor: null,
+          quickShapeBase: null,
+          quickShapeStartPtr: null
+        };
+
+        function toWorld(screenX, screenY) {
+          return {
+            x: (screenX - state.camera.x) / state.camera.zoom,
+            y: (screenY - state.camera.y) / state.camera.zoom
+          };
+        }
+        function toScreen(worldX, worldY) {
+          return {
+            x: worldX * state.camera.zoom + state.camera.x,
+            y: worldY * state.camera.zoom + state.camera.y
+          };
+        }
+
+        // --- DOM要素の取得 ---
+        const container = document.getElementById('appContainer');
+        const inkCanvas = document.getElementById('inkCanvas');
+        const overlayCanvas = document.getElementById('overlayCanvas');
+        const inkCtx = inkCanvas.getContext('2d', { desynchronized: true });
+        const overlayCtx = overlayCanvas.getContext('2d');
+
+        const lassoEraserToggle = document.getElementById('lassoEraserToggle');
+        const twoFingerSimToggle = document.getElementById('twoFingerSimToggle');
+        const undoBtn = document.getElementById('undoBtn');
+        const redoBtn = document.getElementById('redoBtn');
+        const clearBtn = document.getElementById('clearBtn');
+        const exportBtn = document.getElementById('exportBtn');
+        const helpBtn = document.getElementById('helpBtn');
+        const pressureToggle = document.getElementById('pressureToggle');
+        const guideModal = document.getElementById('guideModal');
+        const closeGuideBtn = document.getElementById('closeGuideBtn');
+        const confirmGuideBtn = document.getElementById('confirmGuideBtn');
+
+        const selectionActionBar = document.getElementById('selectionActionBar');
+        const selectionCountText = document.getElementById('selectionCountText');
+        const selectionDeselectBtn = document.getElementById('selectionDeselectBtn');
+        const selectionDeleteBtn = document.getElementById('selectionDeleteBtn');
+
+        const pointerTypeText = document.getElementById('pointerTypeText');
+        const pressureText = document.getElementById('pressureText');
+        const buttonsText = document.getElementById('buttonsText');
+        const touchCountText = document.getElementById('touchCountText');
+        const modeStatusText = document.getElementById('modeStatusText');
+        const pointerStatusDot = document.getElementById('pointerStatusDot');
+        const swipeHud = document.getElementById('swipeHud');
+        const swipeHudIcon = document.getElementById('swipeHudIcon');
+        const swipeHudText = document.getElementById('swipeHudText');
+        const toastContainer = document.getElementById('toastContainer');
+
+        const homeView = document.getElementById('homeView');
+        const notebookView = document.getElementById('notebookView');
+        const notebookGrid = document.getElementById('notebookGrid');
+        const createNotebookBtn = document.getElementById('createNotebookBtn');
+        const backToHomeBtn = document.getElementById('backToHomeBtn');
+        const addPageBtn = document.getElementById('addPageBtn');
+        const pageStage = document.getElementById('pageStage');
+        const notebookTitle = document.getElementById('notebookTitle');
+        const pageCounter = document.getElementById('pageCounter');
+        const openPageBtn = document.getElementById('openPageBtn');
+        const closeEditorBtn = document.getElementById('closeEditorBtn');
+        const cloudSyncBtn = document.getElementById('cloudSyncBtn');
+        const newNotebookModal = document.getElementById('newNotebookModal');
+        const newNotebookForm = document.getElementById('newNotebookForm');
+        const newNotebookName = document.getElementById('newNotebookName');
+        const cancelNotebookBtn = document.getElementById('cancelNotebookBtn');
+
+        let dpr = window.devicePixelRatio || 1;
+
+        // --- Phase 2: ライブラリ、ページ、3D画面遷移 ---
+        const STORAGE_KEY = 'inknote_phase2_library_v1';
+        const COVER_COLORS = ['#315f72', '#865146', '#566a45', '#6a557d', '#9a733c', '#394b68'];
+        let saveTimer = null;
+
+        // --- Phase 3: Google Drive appDataFolder クラウド同期 ---
+        // 公開時は Google Cloud Console で本番ドメインと Drive API のみに制限すること。
+        const CLIENT_ID = '306859405455-buptjo9g0qjm03h8vl95bdb7n52h6m6o.apps.googleusercontent.com';
+        const API_KEY = 'AIzaSyB15C1QAqXLImwCVbVUQazEEl5oSiovWrg';
+        const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.appdata';
+        const DRIVE_FILE_NAME = 'InkNote.backup.json';
+        let googleTokenClient = null;
+        let googleAccessToken = null;
+        let googleApisReady = false;
+
+        function setCloudButtonState(label, busy = false) {
+          cloudSyncBtn.textContent = label;
+          cloudSyncBtn.classList.toggle('syncing', busy);
+          cloudSyncBtn.disabled = busy || !googleApisReady;
+        }
+
+        function waitForGoogleLibraries(timeout = 15000) {
+          return new Promise((resolve, reject) => {
+            const started = Date.now();
+            const check = () => {
+              if (window.google?.accounts?.oauth2 && window.gapi?.load) return resolve();
+              if (Date.now() - started > timeout) return reject(new Error('Google API の読み込みがタイムアウトしました'));
+              setTimeout(check, 100);
+            };
+            check();
+          });
+        }
+
+        function loadGapiClient() {
+          return new Promise((resolve, reject) => {
+            window.gapi.load('client', { callback: resolve, onerror: () => reject(new Error('Drive API を初期化できません')) });
+          });
+        }
+
+        async function initializeGoogleDrive() {
+          try {
+            await waitForGoogleLibraries();
+            await loadGapiClient();
+            await window.gapi.client.init({
+              apiKey: API_KEY,
+              discoveryDocs: ['https://www.googleapis.com/discovery/v1/apis/drive/v3/rest']
+            });
+            googleTokenClient = window.google.accounts.oauth2.initTokenClient({
+              client_id: CLIENT_ID,
+              scope: DRIVE_SCOPE,
+              callback: handleGoogleTokenResponse,
+              error_callback: handleGoogleTokenError
+            });
+            googleApisReady = true;
+            setCloudButtonState('☁️ Google Drive同期');
+          } catch (error) {
+            console.warn('Google Drive sync initialization failed.', error);
+            cloudSyncBtn.disabled = true;
+            cloudSyncBtn.textContent = '☁️ 同期を利用できません';
+            cloudSyncBtn.title = error.message;
+          }
+        }
+
+        function requestGoogleDriveSync() {
+          if (!googleApisReady || !googleTokenClient) return;
+          setCloudButtonState('☁️ Google認証中…', true);
+          googleTokenClient.requestAccessToken({ prompt: googleAccessToken ? '' : 'consent' });
+        }
+
+        function handleGoogleTokenError(error) {
+          console.warn('Google authorization was not completed.', error);
+          setCloudButtonState('☁️ 認証を完了できません');
+          setTimeout(() => setCloudButtonState('☁️ Google Drive同期'), 2200);
+        }
+
+        function handleGoogleTokenResponse(response) {
+          if (!response?.access_token) {
+            handleGoogleTokenError(response);
+            return;
+          }
+          googleAccessToken = response.access_token;
+          syncWithGoogleDrive().catch(error => {
+            console.error('Google Drive sync failed.', error);
+            setCloudButtonState('☁️ 同期に失敗しました');
+            cloudSyncBtn.title = error.message;
+            setTimeout(() => setCloudButtonState('☁️ Google Drive同期'), 2600);
+          });
+        }
+
+        function makeCloudPayload() {
+          return {
+            schemaVersion: 1,
+            exportedAt: new Date().toISOString(),
+            currentNotebookId: state.currentNotebookId,
+            currentPageId: state.currentPageId,
+            notebooks: state.notebooks.map(notebook => ({
+              id: notebook.id,
+              title: notebook.title,
+              coverColor: notebook.coverColor,
+              pages: notebook.pages.map(page => ({
+                id: page.id,
+                strokes: page.strokes,
+                thumbnail: page.thumbnail
+              }))
+            }))
+          };
+        }
+
+        function normalizeCloudNotebook(notebook) {
+          return {
+            id: notebook.id || makeId('notebook'),
+            title: notebook.title || '無題のノート',
+            coverColor: notebook.coverColor || COVER_COLORS[0],
+            pages: (Array.isArray(notebook.pages) && notebook.pages.length ? notebook.pages : [makePage()]).map(page => ({
+              id: page.id || makeId('page'),
+              strokes: Array.isArray(page.strokes) ? page.strokes : [],
+              undoStack: [],
+              redoStack: [],
+              thumbnail: typeof page.thumbnail === 'string' ? page.thumbnail : null
+            }))
+          };
+        }
+
+        function mergeCloudLibrary(remote) {
+          if (!remote || !Array.isArray(remote.notebooks)) throw new Error('クラウドデータの形式が正しくありません');
+          const mergedNotebooks = new Map(state.notebooks.map(notebook => [notebook.id, notebook]));
+          remote.notebooks.map(normalizeCloudNotebook).forEach(remoteNotebook => {
+            const localNotebook = mergedNotebooks.get(remoteNotebook.id);
+            if (!localNotebook) {
+              mergedNotebooks.set(remoteNotebook.id, remoteNotebook);
+              return;
+            }
+            const mergedPages = new Map(localNotebook.pages.map(page => [page.id, page]));
+            remoteNotebook.pages.forEach(page => mergedPages.set(page.id, page));
+            mergedNotebooks.set(remoteNotebook.id, { ...remoteNotebook, pages: Array.from(mergedPages.values()) });
+          });
+          state.notebooks = Array.from(mergedNotebooks.values());
+          const preferredNotebookId = remote.currentNotebookId;
+          state.currentNotebookId = state.notebooks.some(n => n.id === preferredNotebookId)
+            ? preferredNotebookId : state.notebooks[0].id;
+          const notebook = state.currentNotebook;
+          state.currentPageId = notebook.pages.some(p => p.id === remote.currentPageId)
+            ? remote.currentPageId : notebook.pages[0].id;
+          state.activePageIndex = Math.max(0, notebook.pages.findIndex(p => p.id === state.currentPageId));
+          saveLibraryNow();
+          renderHome();
+        }
+
+        async function driveFetch(url, options = {}) {
+          const response = await fetch(url, {
+            ...options,
+            headers: {
+              Authorization: `Bearer ${googleAccessToken}`,
+              ...(options.headers || {})
+            }
+          });
+          if (!response.ok) {
+            if (response.status === 401) googleAccessToken = null;
+            let details = '';
+            try { details = (await response.json())?.error?.message || ''; } catch (_) {}
+            throw new Error(details || `Google Drive API error (${response.status})`);
+          }
+          return response;
+        }
+
+        async function findCloudBackup() {
+          const params = new URLSearchParams({
+            spaces: 'appDataFolder',
+            q: `name = '${DRIVE_FILE_NAME}' and trashed = false`,
+            orderBy: 'modifiedTime desc',
+            pageSize: '1',
+            fields: 'files(id,name,modifiedTime)',
+            key: API_KEY
+          });
+          const response = await driveFetch(`https://www.googleapis.com/drive/v3/files?${params}`);
+          const data = await response.json();
+          return data.files?.[0] || null;
+        }
+
+        async function downloadCloudBackup(fileId) {
+          const response = await driveFetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media&key=${encodeURIComponent(API_KEY)}`);
+          return response.json();
+        }
+
+        async function createCloudBackupFile() {
+          const response = await driveFetch(`https://www.googleapis.com/drive/v3/files?fields=id&key=${encodeURIComponent(API_KEY)}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: DRIVE_FILE_NAME, parents: ['appDataFolder'], mimeType: 'application/json' })
+          });
+          return (await response.json()).id;
+        }
+
+        async function uploadCloudBackup(fileId, payload) {
+          await driveFetch(`https://www.googleapis.com/upload/drive/v3/files/${encodeURIComponent(fileId)}?uploadType=media&key=${encodeURIComponent(API_KEY)}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json; charset=UTF-8' },
+            body: JSON.stringify(payload)
+          });
+        }
+
+        async function syncWithGoogleDrive() {
+          setCloudButtonState('☁️ クラウドを確認中…', true);
+          captureCurrentPageThumbnail();
+          let remoteFile = await findCloudBackup();
+          if (remoteFile) {
+            const remoteLibrary = await downloadCloudBackup(remoteFile.id);
+            mergeCloudLibrary(remoteLibrary);
+          } else {
+            remoteFile = { id: await createCloudBackupFile() };
+          }
+          await uploadCloudBackup(remoteFile.id, makeCloudPayload());
+          saveLibraryNow();
+          setCloudButtonState('✓ 同期完了');
+          setTimeout(() => setCloudButtonState('☁️ Google Drive同期'), 2200);
+        }
+
+        // --- Phase 3: PWAメタデータ / Service Worker ---
+        const pwaObjectUrls = [];
+
+        function canvasToBlob(canvas, type = 'image/png') {
+          return new Promise(resolve => canvas.toBlob(resolve, type));
+        }
+
+        async function createPwaIcon(size) {
+          const canvas = document.createElement('canvas');
+          canvas.width = size;
+          canvas.height = size;
+          const ctx = canvas.getContext('2d');
+          const gradient = ctx.createLinearGradient(0, 0, size, size);
+          gradient.addColorStop(0, '#315f72');
+          gradient.addColorStop(1, '#17232d');
+          ctx.fillStyle = gradient;
+          ctx.fillRect(0, 0, size, size);
+          ctx.fillStyle = '#ffffff';
+          ctx.fillRect(size * .23, size * .17, size * .54, size * .66);
+          ctx.strokeStyle = '#d7e0e7';
+          ctx.lineWidth = Math.max(2, size * .012);
+          for (let y = size * .29; y < size * .72; y += size * .085) {
+            ctx.beginPath(); ctx.moveTo(size * .3, y); ctx.lineTo(size * .7, y); ctx.stroke();
+          }
+          ctx.strokeStyle = '#2563eb';
+          ctx.lineWidth = size * .035;
+          ctx.lineCap = 'round';
+          ctx.beginPath();
+          ctx.moveTo(size * .33, size * .56);
+          ctx.quadraticCurveTo(size * .45, size * .43, size * .52, size * .58);
+          ctx.quadraticCurveTo(size * .6, size * .68, size * .68, size * .48);
+          ctx.stroke();
+          const blob = await canvasToBlob(canvas);
+          const url = URL.createObjectURL(blob);
+          pwaObjectUrls.push(url);
+          return url;
+        }
+
+        async function initializePwa() {
+          try {
+            const [icon192, icon512] = await Promise.all([createPwaIcon(192), createPwaIcon(512)]);
+            const manifest = {
+              id: './index.html',
+              name: 'InkNote 手書きノート',
+              short_name: 'InkNote',
+              description: '手書きジェスチャー対応のノートアプリ',
+              start_url: './index.html',
+              scope: './',
+              display: 'standalone',
+              orientation: 'any',
+              background_color: '#17232d',
+              theme_color: '#17232d',
+              icons: [
+                { src: icon192, sizes: '192x192', type: 'image/png', purpose: 'any maskable' },
+                { src: icon512, sizes: '512x512', type: 'image/png', purpose: 'any maskable' }
+              ]
+            };
+            const manifestUrl = URL.createObjectURL(new Blob([JSON.stringify(manifest)], { type: 'application/manifest+json' }));
+            pwaObjectUrls.push(manifestUrl);
+            const manifestLink = document.createElement('link');
+            manifestLink.rel = 'manifest';
+            manifestLink.href = manifestUrl;
+            document.head.appendChild(manifestLink);
+            const appleIcon = document.createElement('link');
+            appleIcon.rel = 'apple-touch-icon';
+            appleIcon.href = icon192;
+            document.head.appendChild(appleIcon);
+            document.documentElement.classList.toggle('standalone',
+              window.matchMedia('(display-mode: standalone)').matches || Boolean(navigator.standalone));
+          } catch (error) {
+            console.warn('PWA manifest initialization failed.', error);
+          }
+        }
+
+        async function registerServiceWorker() {
+          if (!('serviceWorker' in navigator)) return;
+          if (!window.isSecureContext) {
+            console.info('Service Worker registration requires HTTPS or localhost.');
+            return;
+          }
+          try {
+            const registration = await navigator.serviceWorker.register('./sw.js', { scope: './' });
+            registration.update().catch(() => {});
+          } catch (error) {
+            console.warn('Service Worker registration failed.', error);
+          }
+        }
+
+        function loadLibrary() {
+          try {
+            const raw = localStorage.getItem(STORAGE_KEY);
+            if (!raw) return;
+            const parsed = JSON.parse(raw);
+            if (!Array.isArray(parsed.notebooks) || parsed.notebooks.length === 0) return;
+            state.notebooks = parsed.notebooks.map(n => ({
+              id: n.id || makeId('notebook'),
+              title: n.title || '無題のノート',
+              coverColor: n.coverColor || COVER_COLORS[0],
+              pages: (Array.isArray(n.pages) && n.pages.length ? n.pages : [makePage()]).map(p => ({
+                id: p.id || makeId('page'),
+                strokes: Array.isArray(p.strokes) ? p.strokes : [],
+                undoStack: [],
+                redoStack: [],
+                thumbnail: typeof p.thumbnail === 'string' ? p.thumbnail : null
+              }))
+            }));
+            state.currentNotebookId = state.notebooks.some(n => n.id === parsed.currentNotebookId)
+              ? parsed.currentNotebookId : state.notebooks[0].id;
+            const notebook = state.currentNotebook;
+            state.currentPageId = notebook.pages.some(p => p.id === parsed.currentPageId)
+              ? parsed.currentPageId : notebook.pages[0].id;
+          } catch (error) {
+            console.warn('InkNote library could not be restored.', error);
+          }
+        }
+
+        function saveLibraryNow() {
+          clearTimeout(saveTimer);
+          saveTimer = null;
+          try {
+            const serializable = {
+              currentNotebookId: state.currentNotebookId,
+              currentPageId: state.currentPageId,
+              notebooks: state.notebooks.map(n => ({
+                id: n.id, title: n.title, coverColor: n.coverColor,
+                pages: n.pages.map(p => ({ id: p.id, strokes: p.strokes, thumbnail: p.thumbnail }))
+              }))
+            };
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(serializable));
+          } catch (error) {
+            console.warn('InkNote library could not be saved.', error);
+          }
+        }
+
+        function scheduleLibrarySave() {
+          clearTimeout(saveTimer);
+          saveTimer = setTimeout(saveLibraryNow, 180);
+        }
+
+        function captureCurrentPageThumbnail() {
+          const page = state.currentPage;
+          if (!page) return;
+          if (page.strokes.length === 0) {
+            page.thumbnail = null;
+            scheduleLibrarySave();
+            return;
+          }
+          const thumb = document.createElement('canvas');
+          thumb.width = 360;
+          thumb.height = 480;
+          const ctx = thumb.getContext('2d');
+          ctx.fillStyle = '#ffffff';
+          ctx.fillRect(0, 0, thumb.width, thumb.height);
+          ctx.strokeStyle = '#e2e8f0';
+          ctx.lineWidth = 1;
+          for (let x = 0; x < thumb.width; x += 18) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, thumb.height); ctx.stroke(); }
+          for (let y = 0; y < thumb.height; y += 18) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(thumb.width, y); ctx.stroke(); }
+
+          let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+          page.strokes.forEach(s => {
+            const b = s.bbox || calculateBBox(s.points);
+            minX = Math.min(minX, b.minX); minY = Math.min(minY, b.minY);
+            maxX = Math.max(maxX, b.maxX); maxY = Math.max(maxY, b.maxY);
+          });
+          const contentW = Math.max(1, maxX - minX);
+          const contentH = Math.max(1, maxY - minY);
+          const scale = Math.min(1, 318 / contentW, 430 / contentH);
+          ctx.save();
+          ctx.translate((thumb.width - contentW * scale) / 2 - minX * scale, (thumb.height - contentH * scale) / 2 - minY * scale);
+          ctx.scale(scale, scale);
+          page.strokes.forEach(s => renderSingleStroke(ctx, s, false));
+          ctx.restore();
+          try { page.thumbnail = thumb.toDataURL('image/jpeg', .74); } catch (_) { page.thumbnail = null; }
+          scheduleLibrarySave();
+        }
+
+        function resetEditorInteraction() {
+          if (state.holdTimer) clearTimeout(state.holdTimer);
+          state.holdTimer = null;
+          state.activeTouches.clear();
+          state.activePenId = null;
+          state.currentPenPoints = [];
+          state.currentMode = 'idle';
+          state.selectedStrokeIds.clear();
+          state.camera = { x: 0, y: 0, zoom: 1 };
+          updateSelectionUI();
+        }
+
+        function setViewMode(mode, options = {}) {
+          if (state.viewMode === 'editing' && mode !== 'editing' && !options.skipCapture) captureCurrentPageThumbnail();
+          state.viewMode = mode;
+          homeView.hidden = mode !== 'home';
+          notebookView.hidden = mode !== 'notebook';
+          container.hidden = mode !== 'editing';
+          if (mode === 'home') renderHome();
+          if (mode === 'notebook') {
+            resetEditorInteraction();
+            renderNotebook();
+          }
+          if (mode === 'editing') {
+            resetEditorInteraction();
+            requestAnimationFrame(() => { resizeCanvas(); redrawInkCanvas(); renderOverlay(); });
+          }
+          scheduleLibrarySave();
+        }
+
+        function renderHome() {
+          notebookGrid.replaceChildren();
+          state.notebooks.forEach(notebook => {
+            const tile = document.createElement('button');
+            tile.type = 'button';
+            tile.className = 'notebook-tile';
+            tile.dataset.notebookId = notebook.id;
+            const cover = document.createElement('div');
+            cover.className = 'notebook-cover';
+            cover.style.background = `linear-gradient(145deg, rgba(255,255,255,.2), transparent 42%), ${notebook.coverColor}`;
+            const name = document.createElement('div');
+            name.className = 'notebook-name';
+            name.textContent = notebook.title;
+            const meta = document.createElement('div');
+            meta.className = 'notebook-meta';
+            meta.textContent = `${notebook.pages.length} ページ`;
+            tile.append(cover, name, meta);
+            tile.addEventListener('click', () => openNotebook(notebook.id));
+            notebookGrid.appendChild(tile);
+          });
+        }
+
+        function openNotebook(notebookId) {
+          const notebook = state.notebooks.find(n => n.id === notebookId);
+          if (!notebook) return;
+          state.currentNotebookId = notebook.id;
+          if (!notebook.pages.length) notebook.pages.push(makePage());
+          const existing = notebook.pages.findIndex(p => p.id === state.currentPageId);
+          state.activePageIndex = existing >= 0 ? existing : 0;
+          state.currentPageId = notebook.pages[state.activePageIndex].id;
+          setViewMode('notebook');
+        }
+
+        function renderNotebook() {
+          const notebook = state.currentNotebook;
+          if (!notebook) { setViewMode('home'); return; }
+          state.activePageIndex = Math.max(0, Math.min(state.activePageIndex, notebook.pages.length - 1));
+          state.currentPageId = notebook.pages[state.activePageIndex].id;
+          notebookTitle.textContent = notebook.title;
+          pageCounter.textContent = `${state.activePageIndex + 1} / ${notebook.pages.length} ページ`;
+          pageStage.replaceChildren();
+          notebook.pages.forEach((page, index) => {
+            const card = document.createElement('article');
+            card.className = 'page-card';
+            card.dataset.index = String(index);
+            card.setAttribute('aria-label', `${index + 1}ページ目`);
+            if (page.thumbnail) {
+              const image = document.createElement('img');
+              image.src = page.thumbnail;
+              image.alt = '';
+              card.appendChild(image);
+            }
+            const number = document.createElement('span');
+            number.className = 'page-card-number';
+            number.textContent = String(index + 1);
+            card.appendChild(number);
+            pageStage.appendChild(card);
+          });
+          updatePageTransforms(0);
+        }
+
+        function updatePageTransforms(dragProgress = 0) {
+          const cards = pageStage.querySelectorAll('.page-card');
+          cards.forEach((card, index) => {
+            const delta = index - state.activePageIndex + dragProgress;
+            const abs = Math.abs(delta);
+            const direction = Math.sign(delta);
+            const x = direction * Math.min(300, 178 + Math.max(0, abs - 1) * 24);
+            const z = 80 - abs * 72;
+            const rotate = direction * -Math.min(24, 10 + abs * 4);
+            const scale = Math.max(.78, 1 - abs * .045);
+            const opacity = abs > 4 ? 0 : Math.max(.3, 1 - Math.max(0, abs - 2) * .2);
+            card.style.transform = `translate(-50%, -50%) translateX(${abs < .001 ? 0 : x}px) translateZ(${z}px) rotateY(${abs < .001 ? 0 : rotate}deg) scale(${scale})`;
+            card.style.opacity = String(opacity);
+            card.style.zIndex = String(100 - Math.round(abs * 5));
+            card.style.pointerEvents = abs < .2 ? 'auto' : 'none';
+            card.classList.toggle('active', abs < .2);
+          });
+        }
+
+        function selectPage(index) {
+          const notebook = state.currentNotebook;
+          if (!notebook) return;
+          state.activePageIndex = Math.max(0, Math.min(index, notebook.pages.length - 1));
+          state.currentPageId = notebook.pages[state.activePageIndex].id;
+          pageCounter.textContent = `${state.activePageIndex + 1} / ${notebook.pages.length} ページ`;
+          updatePageTransforms(0);
+          scheduleLibrarySave();
+        }
+
+        function openActivePage() {
+          const notebook = state.currentNotebook;
+          if (!notebook?.pages[state.activePageIndex]) return;
+          state.currentPageId = notebook.pages[state.activePageIndex].id;
+          setViewMode('editing');
+        }
+
+        function closeEditingViaPinch() {
+          state.camera.zoom = .4;
+          state.activeTouches.clear();
+          showToast('ページを閉じました', '📖');
+          setViewMode('notebook');
+        }
+
+        // --- キャンバスのサイズ調整 ---
+        function resizeCanvas() {
+          dpr = window.devicePixelRatio || 1;
+          const rect = container.getBoundingClientRect();
+
+          inkCanvas.width = rect.width * dpr;
+          inkCanvas.height = rect.height * dpr;
+          inkCanvas.style.width = rect.width + 'px';
+          inkCanvas.style.height = rect.height + 'px';
+          inkCtx.scale(dpr, dpr);
+
+          overlayCanvas.width = rect.width * dpr;
+          overlayCanvas.height = rect.height * dpr;
+          overlayCanvas.style.width = rect.width + 'px';
+          overlayCanvas.style.height = rect.height + 'px';
+          overlayCtx.scale(dpr, dpr);
+
+          redrawInkCanvas();
+          renderOverlay();
+        }
+
+        window.addEventListener('resize', resizeCanvas);
+
+        // --- UIトースト表示 ---
+        function showToast(message, icon = 'ℹ️') {
+          const toast = document.createElement('div');
+          toast.className = 'toast';
+          toast.innerHTML = `<span>${icon}</span><span>${message}</span>`;
+          toastContainer.appendChild(toast);
+          setTimeout(() => {
+            toast.style.transition = 'opacity 0.25s ease, transform 0.25s ease';
+            toast.style.opacity = '0';
+            toast.style.transform = 'translateY(-6px) scale(0.95)';
+            setTimeout(() => toast.remove(), 260);
+          }, 2000);
+        }
+
+        // --- スワイプHUD表示 ---
+        let swipeHudTimeout = null;
+        function triggerSwipeHud(isUndo) {
+          swipeHudIcon.textContent = isUndo ? '↩' : '↪';
+          swipeHudText.textContent = isUndo ? 'Undo (元に戻す)' : 'Redo (やり直す)';
+          swipeHud.classList.add('show');
+          clearTimeout(swipeHudTimeout);
+          swipeHudTimeout = setTimeout(() => {
+            swipeHud.classList.remove('show');
+          }, 700);
+        }
+
+        // --- 幾何ユーティリティ計算 ---
+
+        // バウンディングボックス計算
+        function calculateBBox(points) {
+          let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+          for (let i = 0; i < points.length; i++) {
+            const p = points[i];
+            if (p.x < minX) minX = p.x;
+            if (p.y < minY) minY = p.y;
+            if (p.x > maxX) maxX = p.x;
+            if (p.y > maxY) maxY = p.y;
+          }
+          return { minX, minY, maxX, maxY };
+        }
+
+        // 2つのバウンディングボックスが交差または接触しているか判定
+        function bboxesIntersect(b1, b2, padding = 4) {
+          return !(
+            b1.maxX + padding < b2.minX ||
+            b1.minX - padding > b2.maxX ||
+            b1.maxY + padding < b2.minY ||
+            b1.minY - padding > b2.maxY
+          );
+        }
+
+        // 線分 (p1-p2) と (q1-q2) の交差判定
+        function doSegmentsIntersect(p1, p2, q1, q2) {
+          function ccw(a, b, c) {
+            return (c.y - a.y) * (b.x - a.x) > (b.y - a.y) * (c.x - a.x);
+          }
+          return (ccw(p1, q1, q2) !== ccw(p2, q1, q2)) && (ccw(p1, p2, q1) !== ccw(p1, p2, q2));
+        }
+
+        // 点 p が多角形 polygon (点の配列) の内側にあるか (Ray-casting)
+        function isPointInPolygon(p, polygon) {
+          let inside = false;
+          const n = polygon.length;
+          for (let i = 0, j = n - 1; i < n; j = i++) {
+            const xi = polygon[i].x, yi = polygon[i].y;
+            const xj = polygon[j].x, yj = polygon[j].y;
+            const intersect = ((yi > p.y) !== (yj > p.y)) &&
+              (p.x < (xj - xi) * (p.y - yi) / ((yj - yi) || 0.0001) + xi);
+            if (intersect) inside = !inside;
+          }
+          return inside;
+        }
+
+        // 点と線分の最短距離の2乗
+        function distToSegmentSquared(p, v, w) {
+          const l2 = (v.x - w.x) ** 2 + (v.y - w.y) ** 2;
+          if (l2 === 0) return (p.x - v.x) ** 2 + (p.y - v.y) ** 2;
+          let t = ((p.x - v.x) * (w.x - v.x) + (p.y - v.y) * (w.y - v.y)) / l2;
+          t = Math.max(0, Math.min(1, t));
+          return (p.x - (v.x + t * (w.x - v.x))) ** 2 + (p.y - (v.y + t * (w.y - v.y))) ** 2;
+        }
+
+        // 点がストロークにヒットしているか
+        function isPointNearStroke(p, stroke, tolerance = 10) {
+          if (!stroke.bbox) stroke.bbox = calculateBBox(stroke.points);
+          if (p.x < stroke.bbox.minX - tolerance || p.x > stroke.bbox.maxX + tolerance ||
+              p.y < stroke.bbox.minY - tolerance || p.y > stroke.bbox.maxY + tolerance) {
+            return false;
+          }
+          const tol2 = (tolerance + stroke.width) ** 2;
+          const pts = stroke.points;
+          for (let i = 0; i < pts.length - 1; i++) {
+            if (distToSegmentSquared(p, pts[i], pts[i+1]) <= tol2) {
+              return true;
+            }
+          }
+          return false;
+        }
+
+        function getSelectionBBox() {
+          if (state.selectedStrokeIds.size === 0) return null;
+          let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+          for (const s of state.strokes) {
+            if (state.selectedStrokeIds.has(s.id)) {
+              minX = Math.min(minX, s.bbox.minX);
+              minY = Math.min(minY, s.bbox.minY);
+              maxX = Math.max(maxX, s.bbox.maxX);
+              maxY = Math.max(maxY, s.bbox.maxY);
+            }
+          }
+          return { minX, minY, maxX, maxY };
+        }
+
+        function rdp(points, epsilon) {
+          if (points.length < 3) return points;
+          let dmax = 0;
+          let index = 0;
+          const end = points.length - 1;
+          const epsSq = epsilon * epsilon;
+          for (let i = 1; i < end; i++) {
+            const dSq = distToSegmentSquared(points[i], points[0], points[end]);
+            if (dSq > dmax) { index = i; dmax = dSq; }
+          }
+          if (dmax > epsSq) {
+            const left = rdp(points.slice(0, index + 1), epsilon);
+            const right = rdp(points.slice(index), epsilon);
+            return left.slice(0, left.length - 1).concat(right);
+          } else {
+            return [points[0], points[end]];
+          }
+        }
+
+        function recognizeShape(points) {
+          let pathLength = 0;
+          for (let i = 1; i < points.length; i++) {
+            pathLength += Math.hypot(points[i].x - points[i-1].x, points[i].y - points[i-1].y);
+          }
+          if (pathLength < 30) return null;
+
+          const start = points[0];
+          const end = points[points.length - 1];
+          const startEndDist = Math.hypot(start.x - end.x, start.y - end.y);
+          const isClosed = startEndDist < Math.max(pathLength * 0.25, 40);
+
+          if (!isClosed) {
+            if (startEndDist / pathLength > 0.85) {
+              return { type: 'line', p1: start, p2: end, center: {x: (start.x+end.x)/2, y: (start.y+end.y)/2} };
+            }
+            return null;
+          }
+
+          const bbox = calculateBBox(points);
+          const center = { x: (bbox.minX + bbox.maxX) / 2, y: (bbox.minY + bbox.maxY) / 2 };
+          
+          let cx = 0, cy = 0;
+          points.forEach(p => { cx += p.x; cy += p.y; });
+          cx /= points.length;
+          cy /= points.length;
+          
+          let dists = points.map(p => Math.hypot(p.x - cx, p.y - cy));
+          let avgDist = dists.reduce((a, b) => a + b, 0) / dists.length;
+          let variance = dists.reduce((a, b) => a + Math.pow(b - avgDist, 2), 0) / dists.length;
+          let stdevRatio = Math.sqrt(variance) / (avgDist || 1);
+          
+          let area = 0;
+          for(let i = 0; i < points.length - 1; i++){
+            area += (points[i].x * points[i+1].y - points[i+1].x * points[i].y);
+          }
+          area += (points[points.length-1].x * points[0].y - points[0].x * points[points.length-1].y);
+          area = Math.abs(area / 2);
+          
+          const circleRatio = (4 * Math.PI * area) / (pathLength * pathLength);
+
+          if (circleRatio > 0.75 || stdevRatio < 0.15) {
+            const rx = (bbox.maxX - bbox.minX) / 2;
+            const ry = (bbox.maxY - bbox.minY) / 2;
+            return { type: 'ellipse', center, rx, ry };
+          }
+
+          const simplified = rdp(points, pathLength * 0.05);
+          let numCorners = simplified.length - 1;
+
+          if (numCorners === 3) {
+            return { type: 'triangle', points: simplified.slice(0, 3), center };
+          }
+          if (numCorners === 4 || numCorners === 5 || numCorners === 6) {
+            return { type: 'rectangle', bbox, center };
+          }
+
+          const rx = (bbox.maxX - bbox.minX) / 2;
+          const ry = (bbox.maxY - bbox.minY) / 2;
+          return { type: 'ellipse', center, rx, ry };
+        }
+
+        function transformPoint(p, center, scale, rotation) {
+          const dx = p.x - center.x;
+          const dy = p.y - center.y;
+          const scaledX = dx * scale;
+          const scaledY = dy * scale;
+          const rotX = scaledX * Math.cos(rotation) - scaledY * Math.sin(rotation);
+          const rotY = scaledX * Math.sin(rotation) + scaledY * Math.cos(rotation);
+          return { x: center.x + rotX, y: center.y + rotY };
+        }
+
+        function generateShapePoints(shape, scale, rotation) {
+          const pts = [];
+          if (shape.type === 'line') {
+            pts.push(transformPoint(shape.p1, shape.center, scale, rotation));
+            pts.push(transformPoint(shape.p2, shape.center, scale, rotation));
+          } else if (shape.type === 'rectangle') {
+            const b = shape.bbox;
+            const corners = [{ x: b.minX, y: b.minY }, { x: b.maxX, y: b.minY }, { x: b.maxX, y: b.maxY }, { x: b.minX, y: b.maxY }];
+            corners.forEach(c => pts.push(transformPoint(c, shape.center, scale, rotation)));
+            pts.push(pts[0]);
+          } else if (shape.type === 'triangle') {
+            shape.points.forEach(p => pts.push(transformPoint(p, shape.center, scale, rotation)));
+            pts.push(pts[0]);
+          } else if (shape.type === 'ellipse') {
+            const steps = 48;
+            for (let i = 0; i <= steps; i++) {
+              const theta = (i / steps) * Math.PI * 2;
+              const p = { x: shape.center.x + shape.rx * Math.cos(theta), y: shape.center.y + shape.ry * Math.sin(theta) };
+              pts.push(transformPoint(p, shape.center, scale, rotation));
+            }
+          }
+          const now = performance.now();
+          return pts.map(p => ({ x: p.x, y: p.y, pressure: 0.6, time: now }));
+        }
+
+        // --- 要件2-1: スクラッチ（ジグザグ）消去の検出アルゴリズム ---
+        function detectScratchGesture(points) {
+          if (points.length < 12) return false;
+
+          const now = points[points.length - 1].time;
+          // 直近1.0秒以内のポイントを対象
+          const recent = [];
+          for (let i = points.length - 1; i >= 0; i--) {
+            if (now - points[i].time <= 1000) {
+              recent.unshift(points[i]);
+            } else {
+              break;
+            }
+          }
+          if (recent.length < 10) return false;
+
+          // 方向転換（反転）の回数を計測
+          let reversals = 0;
+          let prevDir = null;
+          let totalPathLength = 0;
+
+          // 2点ごとのステップで方向ベクトルを平滑化
+          for (let i = 2; i < recent.length; i += 2) {
+            const p1 = recent[i - 2];
+            const p2 = recent[i];
+            const dx = p2.x - p1.x;
+            const dy = p2.y - p1.y;
+            const len = Math.hypot(dx, dy);
+            if (len < 5) continue; // 微小な震えを無視
+            totalPathLength += len;
+
+            const dir = { x: dx / len, y: dy / len };
+            if (prevDir) {
+              const dot = prevDir.x * dir.x + prevDir.y * dir.y;
+              // 120度以上の急激な折り返し (cos(120°) = -0.5)
+              if (dot < -0.5) {
+                reversals++;
+                prevDir = dir;
+              }
+            } else {
+              prevDir = dir;
+            }
+          }
+
+          const bbox = calculateBBox(recent);
+          const width = bbox.maxX - bbox.minX;
+          const height = bbox.maxY - bbox.minY;
+          const diag = Math.hypot(width, height);
+
+          // スクラッチ成立条件:
+          // 1. 反転が5回以上
+          // 2. 移動総距離が外接対角線の3.0倍以上（狭い範囲で何度も往復している）
+          // 3. サイズが小さすぎず（点ではなく擦り動作）かつ広大すぎない
+          if (reversals >= 5 && totalPathLength > diag * 3.0 && diag > 15 && diag < 400) {
+            return {
+              isScratch: true,
+              bbox,
+              recentPoints: recent,
+              reversals
+            };
+          }
+          return false;
+        }
+
+        // スクラッチ動作に交差しているストロークを探索
+        function findStrokesIntersectingScratch(scratchPoints, scratchBBox) {
+          const hitStrokeIds = new Set();
+          const pStep = 2; // サンプリング
+
+          for (const stroke of state.strokes) {
+            if (!bboxesIntersect(stroke.bbox, scratchBBox, 10)) continue;
+
+            let intersected = false;
+            // スクラッチ線分とストローク線分の交差判定
+            const sPts = stroke.points;
+            for (let i = 0; i < scratchPoints.length - pStep; i += pStep) {
+              const sp1 = scratchPoints[i];
+              const sp2 = scratchPoints[i + pStep];
+
+              for (let j = 0; j < sPts.length - 1; j++) {
+                if (doSegmentsIntersect(sp1, sp2, sPts[j], sPts[j + 1])) {
+                  intersected = true;
+                  break;
+                }
+              }
+              if (intersected) break;
+            }
+
+            if (intersected) {
+              hitStrokeIds.add(stroke.id);
+            }
+          }
+          return hitStrokeIds;
+        }
+
+        // --- 要件2-2 & 2-4: なげなわ範囲判定（ポリゴンに含まれるストローク判定） ---
+        function findStrokesInsideLasso(lassoPolygon) {
+          if (lassoPolygon.length < 3) return new Set();
+
+          const lassoBBox = calculateBBox(lassoPolygon);
+          const hitIds = new Set();
+
+          for (const stroke of state.strokes) {
+            if (!bboxesIntersect(stroke.bbox, lassoBBox)) continue;
+
+            let isHit = false;
+
+            // 1. ストロークの各点がなげなわポリゴン内に入っているか
+            const pts = stroke.points;
+            for (let i = 0; i < pts.length; i += 2) {
+              if (isPointInPolygon(pts[i], lassoPolygon)) {
+                isHit = true;
+                break;
+              }
+            }
+
+            // 2. まだヒットしていない場合、なげなわ輪郭線とストローク線の交差をチェック
+            if (!isHit) {
+              for (let i = 0; i < lassoPolygon.length; i++) {
+                const lp1 = lassoPolygon[i];
+                const lp2 = lassoPolygon[(i + 1) % lassoPolygon.length];
+
+                for (let j = 0; j < pts.length - 1; j++) {
+                  if (doSegmentsIntersect(lp1, lp2, pts[j], pts[j + 1])) {
+                    isHit = true;
+                    break;
+                  }
+                }
+                if (isHit) break;
+              }
+            }
+
+            if (isHit) {
+              hitIds.add(stroke.id);
+            }
+          }
+          return hitIds;
+        }
+
+        // --- 描画エンジン ---
+
+        // ストロークのスムーズ描画 (中点二次ベジエ曲線)
+        function renderSingleStroke(ctx, stroke, isHighlight = false) {
+          const pts = stroke.points;
+          if (!pts || pts.length === 0) return;
+
+          ctx.save();
+          ctx.lineCap = 'round';
+          ctx.lineJoin = 'round';
+
+          if (stroke.penType === 'marker') {
+            ctx.lineCap = 'butt';
+            ctx.globalCompositeOperation = 'multiply';
+            ctx.globalAlpha = 0.5;
+          }
+
+          if (isHighlight) {
+            // 選択時のハイライトグロー外枠
+            ctx.strokeStyle = '#38bdf8';
+            ctx.lineWidth = Math.max(stroke.width * 2 + 4, 8);
+            ctx.globalAlpha = 0.55;
+            ctx.beginPath();
+            drawStrokePath(ctx, pts);
+            ctx.stroke();
+
+            ctx.strokeStyle = '#0284c7';
+            ctx.lineWidth = stroke.width + 1.5;
+            ctx.globalAlpha = 0.9;
+            ctx.beginPath();
+            drawStrokePath(ctx, pts);
+            ctx.stroke();
+          } else {
+            ctx.strokeStyle = stroke.color;
+            if (stroke.penType !== "marker") { ctx.globalAlpha = 1.0; }
+            if (state.usePressure && pts.some(p => p.pressure > 0) && stroke.penType !== "marker") {
+              // 筆圧による可変線幅描画
+              for (let i = 0; i < pts.length - 1; i++) {
+                const p1 = pts[i];
+                const p2 = pts[i + 1];
+                const pVal = p1.pressure || 0.5;
+                const w = stroke.width * (0.4 + pVal * 1.1);
+
+                ctx.beginPath();
+                ctx.lineWidth = w;
+                ctx.moveTo(p1.x, p1.y);
+                ctx.lineTo(p2.x, p2.y);
+                ctx.stroke();
+              }
+            } else {
+              // 均一線幅描画
+              ctx.lineWidth = stroke.width;
+              ctx.beginPath();
+              drawStrokePath(ctx, pts);
+              ctx.stroke();
+            }
+          }
+          ctx.restore();
+        }
+
+        function drawStrokePath(ctx, pts) {
+          if (pts.length < 2) {
+            ctx.arc(pts[0].x, pts[0].y, 1.5, 0, Math.PI * 2);
+            return;
+          }
+          ctx.moveTo(pts[0].x, pts[0].y);
+          if (pts.length === 2) {
+            ctx.lineTo(pts[1].x, pts[1].y);
+            return;
+          }
+          for (let i = 1; i < pts.length - 1; i++) {
+            const midX = (pts[i].x + pts[i + 1].x) / 2;
+            const midY = (pts[i].y + pts[i + 1].y) / 2;
+            ctx.quadraticCurveTo(pts[i].x, pts[i].y, midX, midY);
+          }
+          ctx.lineTo(pts[pts.length - 1].x, pts[pts.length - 1].y);
+        }
+
+        // インクキャンバスの全ストローク再描画
+                        function redrawInkCanvas() {
+          inkCtx.save();
+          inkCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+          inkCtx.clearRect(0, 0, inkCanvas.width, inkCanvas.height);
+          inkCtx.translate(state.camera.x, state.camera.y);
+          inkCtx.scale(state.camera.zoom, state.camera.zoom);
+
+          for (const stroke of state.strokes) {
+            const isSelected = state.selectedStrokeIds.has(stroke.id);
+            renderSingleStroke(inkCtx, stroke, isSelected);
+          }
+          inkCtx.restore();
+
+          updateUndoRedoUI();
+        }
+
+        function renderOverlay() {
+          overlayCtx.save();
+          overlayCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+          overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+          
+          overlayCtx.save();
+          overlayCtx.translate(state.camera.x, state.camera.y);
+          overlayCtx.scale(state.camera.zoom, state.camera.zoom);
+
+          if (state.currentMode === 'lasso_erase' && state.currentPenPoints.length > 1) {
+            overlayCtx.save();
+            overlayCtx.strokeStyle = '#ef4444';
+            overlayCtx.lineWidth = 2.5 / state.camera.zoom;
+            overlayCtx.setLineDash([6 / state.camera.zoom, 5 / state.camera.zoom]);
+            overlayCtx.fillStyle = 'rgba(239, 68, 68, 0.08)';
+            overlayCtx.beginPath();
+            overlayCtx.moveTo(state.currentPenPoints[0].x, state.currentPenPoints[0].y);
+            for (let i = 1; i < state.currentPenPoints.length; i++) {
+              overlayCtx.lineTo(state.currentPenPoints[i].x, state.currentPenPoints[i].y);
+            }
+            overlayCtx.stroke();
+            overlayCtx.closePath();
+            overlayCtx.fill();
+            overlayCtx.restore();
+          }
+
+          if (state.currentMode === 'lasso_select' && state.currentPenPoints.length > 1) {
+            overlayCtx.save();
+            overlayCtx.strokeStyle = '#2563eb';
+            overlayCtx.lineWidth = 2.5 / state.camera.zoom;
+            overlayCtx.setLineDash([5 / state.camera.zoom, 4 / state.camera.zoom]);
+            overlayCtx.fillStyle = 'rgba(37, 99, 235, 0.08)';
+            overlayCtx.beginPath();
+            overlayCtx.moveTo(state.currentPenPoints[0].x, state.currentPenPoints[0].y);
+            for (let i = 1; i < state.currentPenPoints.length; i++) {
+              overlayCtx.lineTo(state.currentPenPoints[i].x, state.currentPenPoints[i].y);
+            }
+            overlayCtx.stroke();
+            overlayCtx.closePath();
+            overlayCtx.fill();
+            overlayCtx.restore();
+          }
+
+          if (state.selectedStrokeIds.size > 0) {
+            const selectedStrokes = state.strokes.filter(s => state.selectedStrokeIds.has(s.id));
+            if (selectedStrokes.length > 0) {
+              let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+              for (const s of selectedStrokes) {
+                minX = Math.min(minX, s.bbox.minX);
+                minY = Math.min(minY, s.bbox.minY);
+                maxX = Math.max(maxX, s.bbox.maxX);
+                maxY = Math.max(maxY, s.bbox.maxY);
+              }
+              const pad = 10 / state.camera.zoom;
+              overlayCtx.save();
+              overlayCtx.strokeStyle = '#0284c7';
+              overlayCtx.lineWidth = 1.5 / state.camera.zoom;
+              overlayCtx.setLineDash([4 / state.camera.zoom, 4 / state.camera.zoom]);
+              overlayCtx.strokeRect(minX - pad, minY - pad, (maxX - minX) + pad * 2, (maxY - minY) + pad * 2);
+              const corners = [
+                [minX - pad, minY - pad],
+                [maxX + pad, minY - pad],
+                [minX - pad, maxY + pad],
+                [maxX + pad, maxY + pad]
+              ];
+              overlayCtx.fillStyle = '#ffffff';
+              overlayCtx.strokeStyle = '#0284c7';
+              overlayCtx.lineWidth = 2 / state.camera.zoom;
+              overlayCtx.setLineDash([]);
+              for (const [cx, cy] of corners) {
+                overlayCtx.beginPath();
+                overlayCtx.arc(cx, cy, 6 / state.camera.zoom, 0, Math.PI * 2);
+                overlayCtx.fill();
+                overlayCtx.stroke();
+              }
+              overlayCtx.restore();
+            }
+          }
+
+          if (state.currentMode === 'quick_shape_adjust' && state.currentPenPoints.length > 0) {
+            const tempStroke = { points: state.currentPenPoints, color: state.color, width: state.baseWidth, penType: state.penType };
+            renderSingleStroke(overlayCtx, tempStroke, false);
+          }
+
+          if (state.currentMode === 'pen_draw' && state.penType === 'marker' && state.currentPenPoints.length > 1) {
+            overlayCtx.save();
+            overlayCtx.lineCap = 'butt';
+            overlayCtx.lineJoin = 'round';
+            overlayCtx.globalAlpha = 0.5;
+            overlayCtx.globalCompositeOperation = 'multiply';
+            overlayCtx.strokeStyle = state.color;
+            overlayCtx.lineWidth = state.baseWidth;
+            overlayCtx.beginPath();
+            drawStrokePath(overlayCtx, state.currentPenPoints);
+            overlayCtx.stroke();
+            overlayCtx.restore();
+          }
+
+          overlayCtx.restore(); // camera transform を解除
+
+          if (state.activeTouches.size > 0) {
+            overlayCtx.save();
+            state.activeTouches.forEach(t => {
+              overlayCtx.strokeStyle = 'rgba(16, 185, 129, 0.6)';
+              overlayCtx.lineWidth = 2;
+              overlayCtx.fillStyle = 'rgba(16, 185, 129, 0.15)';
+              overlayCtx.beginPath();
+              overlayCtx.arc(t.screenX, t.screenY, 24, 0, Math.PI * 2);
+              overlayCtx.fill();
+              overlayCtx.stroke();
+            });
+            overlayCtx.restore();
+          }
+          
+          overlayCtx.restore(); // 全体の restore
+        }
+        // --- Undo / Redo スタック管理 ---
+        function executeAction(action) {
+          state.undoStack.push(action);
+          state.redoStack = []; // 新しいアクションでredoクリア
+          updateUndoRedoUI();
+          scheduleLibrarySave();
+        }
+
+        function undo() {
+          if (state.undoStack.length === 0) return;
+          const action = state.undoStack.pop();
+
+          if (action.type === 'add_stroke') {
+            const idx = state.strokes.findIndex(s => s.id === action.stroke.id);
+            if (idx !== -1) {
+              state.strokes.splice(idx, 1);
+            }
+            state.redoStack.push(action);
+          } else if (action.type === 'delete_strokes') {
+            // 削除されたストロークを復元
+            state.strokes.push(...action.strokes);
+            state.redoStack.push(action);
+          } else if (action.type === 'move_strokes') {
+            // 移動を元に戻す
+            for (const s of state.strokes) {
+              if (action.beforeMap.has(s.id)) {
+                const orig = action.beforeMap.get(s.id);
+                s.points = orig.points.map(p => ({ ...p }));
+                s.bbox = { ...orig.bbox };
+              }
+            }
+            state.redoStack.push(action);
+          }
+
+          state.selectedStrokeIds.clear();
+          updateSelectionUI();
+          redrawInkCanvas();
+          renderOverlay();
+          updateUndoRedoUI();
+          scheduleLibrarySave();
+        }
+
+        function redo() {
+          if (state.redoStack.length === 0) return;
+          const action = state.redoStack.pop();
+
+          if (action.type === 'add_stroke') {
+            state.strokes.push(action.stroke);
+            state.undoStack.push(action);
+          } else if (action.type === 'delete_strokes') {
+            const delIds = new Set(action.strokes.map(s => s.id));
+            state.strokes = state.strokes.filter(s => !delIds.has(s.id));
+            state.undoStack.push(action);
+          } else if (action.type === 'move_strokes') {
+            for (const s of state.strokes) {
+              if (action.afterMap.has(s.id)) {
+                const after = action.afterMap.get(s.id);
+                s.points = after.points.map(p => ({ ...p }));
+                s.bbox = { ...after.bbox };
+              }
+            }
+            state.undoStack.push(action);
+          }
+
+          state.selectedStrokeIds.clear();
+          updateSelectionUI();
+          redrawInkCanvas();
+          renderOverlay();
+          updateUndoRedoUI();
+          scheduleLibrarySave();
+        }
+
+        function updateUndoRedoUI() {
+          undoBtn.disabled = state.undoStack.length === 0;
+          redoBtn.disabled = state.redoStack.length === 0;
+        }
+
+        function updateSelectionUI() {
+          if (state.selectedStrokeIds.size > 0) {
+            selectionCountText.textContent = `${state.selectedStrokeIds.size}件選択中`;
+            selectionActionBar.classList.add('visible');
+          } else {
+            selectionActionBar.classList.remove('visible');
+          }
+        }
+
+        // --- Pointer Events API イベントリスナー（コア入力基盤） ---
+
+        function resetHoldTimer() {
+          if (state.holdTimer) clearTimeout(state.holdTimer);
+          state.holdTimer = setTimeout(() => {
+            triggerQuickShape();
+          }, 600);
+        }
+
+        function triggerQuickShape() {
+          if (state.currentMode !== 'pen_draw' || state.currentPenPoints.length < 15) return;
+          const shape = recognizeShape(state.currentPenPoints);
+          if (!shape) return;
+          
+          state.currentMode = 'quick_shape_adjust';
+          state.quickShapeBase = shape;
+          const lastPt = state.currentPenPoints[state.currentPenPoints.length - 1];
+          state.quickShapeStartPtr = { x: lastPt.x, y: lastPt.y };
+          
+          state.currentPenPoints = generateShapePoints(shape, 1, 0);
+          
+          redrawInkCanvas();
+          renderOverlay();
+          showToast('図形補正（そのままドラッグで調整）', '✨');
+          modeStatusText.textContent = '図形補正中';
+        }
+
+        
+        container.addEventListener('wheel', (e) => {
+          if (e.ctrlKey || e.metaKey) {
+            e.preventDefault();
+            const rect = inkCanvas.getBoundingClientRect();
+            const screenX = e.clientX - rect.left;
+            const screenY = e.clientY - rect.top;
+            
+            const zoomDelta = Math.exp(-e.deltaY * 0.01);
+            let newZoom = state.camera.zoom * zoomDelta;
+            newZoom = Math.min(Math.max(0.1, newZoom), 10);
+            
+            const worldX = (screenX - state.camera.x) / state.camera.zoom;
+            const worldY = (screenY - state.camera.y) / state.camera.zoom;
+            
+            state.camera.zoom = newZoom;
+            state.camera.x = screenX - worldX * newZoom;
+            state.camera.y = screenY - worldY * newZoom;
+            
+            redrawInkCanvas();
+            renderOverlay();
+          } else {
+            e.preventDefault();
+            state.camera.x -= e.deltaX;
+            state.camera.y -= e.deltaY;
+            redrawInkCanvas();
+            renderOverlay();
+          }
+        }, { passive: false });
+
+        container.addEventListener('pointerdown', handlePointerDown, { passive: false });
+        window.addEventListener('pointermove', handlePointerMove, { passive: false });
+        window.addEventListener('pointerup', handlePointerUp, { passive: false });
+        window.addEventListener('pointercancel', handlePointerUp, { passive: false });
+
+        // iOS / iPadOS コンテキストメニューやスクロールを完全に抑止
+        window.addEventListener('contextmenu', (e) => e.preventDefault());
+        document.addEventListener('gesturestart', (e) => e.preventDefault());
+        document.addEventListener('gesturechange', (e) => e.preventDefault());
+        document.addEventListener('gestureend', (e) => e.preventDefault());
+
+                function handlePointerDown(e) {
+          if (e.target.closest('#selectionActionBar') || e.target.closest('#topToolbar') || e.target.closest('button') || e.target.closest('#statusBar') || e.target.closest('#guideModal')) {
+            return;
+          }
+          e.preventDefault();
+
+          const rect = inkCanvas.getBoundingClientRect();
+          const screenX = e.clientX - rect.left;
+          const screenY = e.clientY - rect.top;
+          const { x, y } = toWorld(screenX, screenY);
+          const pressure = e.pressure || 0.5;
+
+          if (state.holdTimer) { clearTimeout(state.holdTimer); state.holdTimer = null; }
+
+          // --- タッチ入力（指）の処理 ---
+          if (e.pointerType === 'touch') {
+            state.activeTouches.set(e.pointerId, {
+              id: e.pointerId,
+              screenX, screenY,
+              x, y,
+              startX: x, startY: y,
+              startScreenX: screenX, startScreenY: screenY,
+              startTime: performance.now()
+            });
+
+            if (state.activeTouches.size === 2 && (state.currentMode === 'idle' || state.currentMode === 'panning')) {
+              const touches = Array.from(state.activeTouches.values());
+              state.initialPinchDist = Math.hypot(touches[0].screenX - touches[1].screenX, touches[0].screenY - touches[1].screenY);
+              state.initialCamera = { x: state.camera.x, y: state.camera.y, zoom: state.camera.zoom };
+              state.twoFingerStartCenter = {
+                x: (touches[0].screenX + touches[1].screenX) / 2,
+                y: (touches[0].screenY + touches[1].screenY) / 2
+              };
+              state.currentMode = 'zooming';
+              modeStatusText.textContent = 'ズーム・パン中';
+              renderOverlay();
+              return;
+            } else if (state.activeTouches.size === 1) {
+              // 選択オブジェクト上のタッチ判定
+              let onSelection = false;
+              if (state.selectedStrokeIds.size > 0) {
+                const selBBox = getSelectionBBox();
+                if (selBBox && x >= selBBox.minX && x <= selBBox.maxX && y >= selBBox.minY && y <= selBBox.maxY) {
+                  onSelection = true;
+                }
+              }
+
+              if (onSelection) {
+                // 選択移動の開始へ進むため、ここでは何もしない
+              } else if (state.currentMode === 'idle' || state.currentMode === 'panning') {
+                state.currentMode = 'panning';
+                modeStatusText.textContent = 'パン中';
+                renderOverlay();
+                return;
+              } else {
+                 // idle以外で選択外をタッチした場合は無視（描画させない）
+                 return;
+              }
+            } else {
+              // 3本指以上は無視
+              return;
+            }
+          }
+
+          // --- 選択オブジェクトの操作判定（指・ペン共通） ---
+          if (state.selectedStrokeIds.size > 0 && (state.currentMode === 'idle' || e.pointerType === 'touch')) {
+            const selBBox = getSelectionBBox();
+            if (selBBox) {
+              const bPad = 10 / state.camera.zoom;
+              const hitRadius = 24 / state.camera.zoom;
+              const corners = [
+                {x: selBBox.minX - bPad, y: selBBox.minY - bPad, type: 'tl'},
+                {x: selBBox.maxX + bPad, y: selBBox.minY - bPad, type: 'tr'},
+                {x: selBBox.minX - bPad, y: selBBox.maxY + bPad, type: 'bl'},
+                {x: selBBox.maxX + bPad, y: selBBox.maxY + bPad, type: 'br'}
+              ];
+
+              let hitHandle = null;
+              for (const c of corners) {
+                if (Math.hypot(x - c.x, y - c.y) < hitRadius) {
+                  hitHandle = c;
+                  break;
+                }
+              }
+
+              if (hitHandle) {
+                state.currentMode = 'scaling_selection';
+                state.activePenId = e.pointerId; // これを追加！
+                state.dragStartPos = { x, y };
+                state.scaleHandle = hitHandle.type;
+                state.dragOriginalPositions = new Map();
+                const selectedStrokes = state.strokes.filter(s => state.selectedStrokeIds.has(s.id));
+                for (const s of selectedStrokes) {
+                  state.dragOriginalPositions.set(s.id, {
+                    points: s.points.map(p => ({ ...p })),
+                    bbox: { ...s.bbox }
+                  });
+                }
+                modeStatusText.textContent = '選択サイズ変更中';
+                renderOverlay();
+                return;
+              }
+
+              if (x >= selBBox.minX && x <= selBBox.maxX && y >= selBBox.minY && y <= selBBox.maxY) {
+                state.currentMode = 'dragging_selection';
+                state.activePenId = e.pointerId; // これを追加！
+                state.dragStartPos = { x, y };
+                state.dragOriginalPositions = new Map();
+                const selectedStrokes = state.strokes.filter(s => state.selectedStrokeIds.has(s.id));
+                for (const s of selectedStrokes) {
+                  state.dragOriginalPositions.set(s.id, {
+                    points: s.points.map(p => ({ ...p })),
+                    bbox: { ...s.bbox }
+                  });
+                }
+                modeStatusText.textContent = '選択移動中';
+                renderOverlay();
+                return;
+              }
+            }
+
+            // 選択枠外をタッチした場合は選択解除
+            state.selectedStrokeIds.clear();
+            updateSelectionUI();
+            redrawInkCanvas();
+          }
+
+          // --- ペン入力の開始 ---
+          // 指の場合はここまで来ないようにする（ただし選択枠外をタッチして選択解除した後はリターンする）
+          if (e.pointerType === 'touch') {
+            return;
+          }
+
+          const isPalmRejected = state.twoFingerCancelTime > 0 && (performance.now() - state.twoFingerCancelTime < 800);
+          const isTwoFingerHold = state.activeTouches.size >= 2 || state.isTwoFingerSimulated || isPalmRejected;
+          const isStylusSideButtonPressed = (e.buttons & 32) !== 0 || (e.buttons & 2) !== 0 || e.button === 5;
+          const isLassoEraser = isStylusSideButtonPressed || state.isLassoEraserModeToggle;
+          
+          state.activePenId = e.pointerId;
+          state.currentPenPoints = [{ x, y, pressure, time: performance.now() }];
+
+          if (isTwoFingerHold) {
+            state.currentMode = 'lasso_select';
+            modeStatusText.textContent = '2本指囲み選択';
+            showToast('2本指囲み選択中...', '✨');
+          } else if (isLassoEraser) {
+            state.currentMode = 'lasso_erase';
+            modeStatusText.textContent = 'なげなわ消去中';
+          } else {
+            state.currentMode = 'pen_draw';
+            modeStatusText.textContent = 'ペン描画中';
+          }
+          renderOverlay();
+        }
+
+        function handlePointerMove(e) {
+          if (state.viewMode !== 'editing') return;
+          e.preventDefault();
+          const rect = inkCanvas.getBoundingClientRect();
+          const screenX = e.clientX - rect.left;
+          const screenY = e.clientY - rect.top;
+          const { x, y } = toWorld(screenX, screenY);
+
+          // タッチのジェスチャー処理
+          if (e.pointerType === 'touch') {
+            if (state.activeTouches.has(e.pointerId)) {
+              const t = state.activeTouches.get(e.pointerId);
+              t.screenX = screenX;
+              t.screenY = screenY;
+              t.x = x;
+              t.y = y;
+            }
+
+            // パン操作
+            if (state.currentMode === 'panning' && state.activeTouches.size === 1) {
+              const t = state.activeTouches.get(e.pointerId);
+              if (t) {
+                const dx = screenX - t.startScreenX;
+                const dy = screenY - t.startScreenY;
+                state.camera.x += dx;
+                state.camera.y += dy;
+                t.startScreenX = screenX;
+                t.startScreenY = screenY;
+                redrawInkCanvas();
+                renderOverlay();
+              }
+              return;
+            }
+
+            // ズーム・パン操作
+            if (state.currentMode === 'zooming' && state.activeTouches.size === 2) {
+              const touches = Array.from(state.activeTouches.values());
+              const currentDist = Math.hypot(touches[0].screenX - touches[1].screenX, touches[0].screenY - touches[1].screenY);
+              const currentCenter = {
+                x: (touches[0].screenX + touches[1].screenX) / 2,
+                y: (touches[0].screenY + touches[1].screenY) / 2
+              };
+              const zoomRatio = currentDist / state.initialPinchDist;
+              let newZoom = state.initialCamera.zoom * zoomRatio;
+              newZoom = Math.min(Math.max(0.1, newZoom), 10);
+              
+              const worldCenterX = (state.twoFingerStartCenter.x - state.initialCamera.x) / state.initialCamera.zoom;
+              const worldCenterY = (state.twoFingerStartCenter.y - state.initialCamera.y) / state.initialCamera.zoom;
+              
+              state.camera.zoom = newZoom;
+              state.camera.x = currentCenter.x - worldCenterX * newZoom;
+              state.camera.y = currentCenter.y - worldCenterY * newZoom;
+
+              // Phase 2: 縮小しきったときは「ページをつまんで閉じる」。
+              if (newZoom < 0.4) {
+                closeEditingViaPinch();
+                return;
+              }
+              
+              redrawInkCanvas();
+              renderOverlay();
+              return;
+            }
+
+            // 2本指スワイプ判定
+            if (state.activeTouches.size === 2 && state.twoFingerStartCenter && !state.swipeTriggered && state.currentMode === 'idle') {
+              const touches = Array.from(state.activeTouches.values());
+              const currentCenter = {
+                x: (touches[0].screenX + touches[1].screenX) / 2,
+                y: (touches[0].screenY + touches[1].screenY) / 2
+              };
+              const deltaX = currentCenter.x - state.twoFingerStartCenter.x;
+              const deltaY = currentCenter.y - state.twoFingerStartCenter.y;
+              
+              if (Math.abs(deltaX) > 65 && Math.abs(deltaX) > Math.abs(deltaY) * 1.3) {
+                state.swipeTriggered = true;
+                if (deltaX < 0) {
+                  undo();
+                  triggerSwipeHud(true);
+                  showToast('2本指左スワイプ: 元に戻す', '↩');
+                } else {
+                  redo();
+                  triggerSwipeHud(false);
+                  showToast('2本指右スワイプ: やり直す', '↪');
+                }
+              }
+            }
+          }
+
+          // --- 対象のポインターIDかどうかのチェック ---
+          if (state.activePenId !== e.pointerId) return;
+
+          // 選択移動中
+          if (state.currentMode === 'dragging_selection') {
+            const dx = x - state.dragStartPos.x;
+            const dy = y - state.dragStartPos.y;
+            const selectedStrokes = state.strokes.filter(s => state.selectedStrokeIds.has(s.id));
+            for (const s of selectedStrokes) {
+              const orig = state.dragOriginalPositions.get(s.id);
+              s.points = orig.points.map(p => ({ ...p, x: p.x + dx, y: p.y + dy }));
+              s.bbox = {
+                minX: orig.bbox.minX + dx, minY: orig.bbox.minY + dy,
+                maxX: orig.bbox.maxX + dx, maxY: orig.bbox.maxY + dy
+              };
+            }
+            redrawInkCanvas();
+            renderOverlay();
+            return;
+          }
+
+          // 選択サイズ変更中
+          if (state.currentMode === 'scaling_selection') {
+            const dx = x - state.dragStartPos.x;
+            const dy = y - state.dragStartPos.y;
+            let fullOrigBBox = { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity };
+            for (const orig of state.dragOriginalPositions.values()) {
+              fullOrigBBox.minX = Math.min(fullOrigBBox.minX, orig.bbox.minX);
+              fullOrigBBox.minY = Math.min(fullOrigBBox.minY, orig.bbox.minY);
+              fullOrigBBox.maxX = Math.max(fullOrigBBox.maxX, orig.bbox.maxX);
+              fullOrigBBox.maxY = Math.max(fullOrigBBox.maxY, orig.bbox.maxY);
+            }
+
+            const ow = fullOrigBBox.maxX - fullOrigBBox.minX;
+            const oh = fullOrigBBox.maxY - fullOrigBBox.minY;
+            if (ow <= 0 || oh <= 0) return;
+
+            let nw = ow, nh = oh, nx = fullOrigBBox.minX, ny = fullOrigBBox.minY;
+            if (state.scaleHandle === 'br') { nw = ow + dx; nh = oh + dy; }
+            else if (state.scaleHandle === 'tl') { nw = ow - dx; nh = oh - dy; nx = fullOrigBBox.minX + dx; ny = fullOrigBBox.minY + dy; }
+            else if (state.scaleHandle === 'tr') { nw = ow + dx; nh = oh - dy; ny = fullOrigBBox.minY + dy; }
+            else if (state.scaleHandle === 'bl') { nw = ow - dx; nh = oh + dy; nx = fullOrigBBox.minX + dx; }
+            
+            const minSize = 10;
+            if (nw < minSize) { if(state.scaleHandle.includes('l')) nx -= (minSize - nw); nw = minSize; }
+            if (nh < minSize) { if(state.scaleHandle.includes('t')) ny -= (minSize - nh); nh = minSize; }
+
+            const scaleX = nw / ow; const scaleY = nh / oh;
+            const selectedStrokes = state.strokes.filter(s => state.selectedStrokeIds.has(s.id));
+            
+            for (const s of selectedStrokes) {
+              const orig = state.dragOriginalPositions.get(s.id);
+              s.points = orig.points.map(p => ({
+                ...p,
+                x: nx + (p.x - fullOrigBBox.minX) * scaleX,
+                y: ny + (p.y - fullOrigBBox.minY) * scaleY
+              }));
+              s.bbox = calculateBBox(s.points);
+            }
+            redrawInkCanvas();
+            renderOverlay();
+            return;
+          }
+
+          if (state.currentMode !== 'pen_draw' && state.currentMode !== 'lasso_erase' && state.currentMode !== 'lasso_select' && state.currentMode !== 'quick_shape_adjust') return;
+
+          // QuickShape ドラッグ調整中
+          if (state.currentMode === 'quick_shape_adjust') {
+            const dx = x - state.quickShapeBase.bbox.centerX;
+            const dy = y - state.quickShapeBase.bbox.centerY;
+            const scale = Math.max(0.1, Math.hypot(dx, dy) / 50);
+            const rotation = Math.atan2(dy, dx);
+            state.currentPenPoints = generateShapePoints(state.quickShapeBase, scale, rotation);
+            renderOverlay();
+            return;
+          }
+
+          const currentPoint = { x, y, pressure: e.pressure || 0.5, time: performance.now() };
+          state.currentPenPoints.push(currentPoint);
+
+          if (state.currentMode === 'lasso_erase' || state.currentMode === 'lasso_select') {
+            renderOverlay();
+            return;
+          }
+
+          if (state.currentMode === 'pen_draw') {
+            if (!state.holdAnchor) {
+              state.holdAnchor = { screenX, screenY };
+              resetHoldTimer();
+            } else {
+              const dist = Math.hypot(screenX - state.holdAnchor.screenX, screenY - state.holdAnchor.screenY);
+              if (dist > 10) {
+                state.holdAnchor = { screenX, screenY };
+                resetHoldTimer();
+              }
+            }
+
+            const pts = state.currentPenPoints;
+            if (pts.length >= 2 && state.penType !== 'marker') {
+              inkCtx.save();
+              inkCtx.translate(state.camera.x, state.camera.y);
+              inkCtx.scale(state.camera.zoom, state.camera.zoom);
+              inkCtx.lineCap = 'round';
+              inkCtx.lineJoin = 'round';
+              inkCtx.strokeStyle = state.color;
+              
+              const p1 = pts[pts.length - 2];
+              const p2 = pts[pts.length - 1];
+              const pVal = p1.pressure || 0.5;
+              const w = state.usePressure ? state.baseWidth * (0.4 + pVal * 1.1) : state.baseWidth;
+              inkCtx.lineWidth = w;
+              
+              inkCtx.beginPath();
+              inkCtx.moveTo(p1.x, p1.y);
+              inkCtx.lineTo(p2.x, p2.y);
+              inkCtx.stroke();
+              inkCtx.restore();
+            } else if (pts.length >= 2 && state.penType === 'marker') {
+              // マーカーの場合は overlay への描画となるため renderOverlay を呼び出す
+              renderOverlay();
+            }
+
+            const scratchResult = detectScratchGesture(pts);
+            if (scratchResult && scratchResult.isScratch) {
+              const hitStrokeIds = findStrokesIntersectingScratch(scratchResult.recentPoints, scratchResult.bbox);
+              if (hitStrokeIds.size > 0) {
+                const deletedStrokes = state.strokes.filter(s => hitStrokeIds.has(s.id));
+                state.strokes = state.strokes.filter(s => !hitStrokeIds.has(s.id));
+                executeAction({ type: 'delete_strokes', strokes: deletedStrokes });
+                state.currentPenPoints = [];
+                state.currentMode = 'idle';
+                modeStatusText.textContent = 'スクラッチ消去発動！';
+                showToast(`⚡ スクラッチ消去: ${deletedStrokes.length}本のストロークを削除しました`, '⚡');
+                redrawInkCanvas();
+                renderOverlay();
+              }
+            }
+          }
+        }
+
+        function handlePointerUp(e) {
+          if (state.viewMode !== 'editing') return;
+          e.preventDefault();
+
+          if (e.pointerType === 'touch') {
+            if (state.activeTouches.size >= 2) {
+              state.twoFingerCancelTime = performance.now();
+            }
+            state.activeTouches.delete(e.pointerId);
+            touchCountText.textContent = `${state.activeTouches.size}本`;
+            
+            if (state.activeTouches.size === 1 && state.currentMode === 'zooming') {
+              // ズームからパンへフォールバック
+              const touch = Array.from(state.activeTouches.values())[0];
+              touch.startScreenX = touch.screenX;
+              touch.startScreenY = touch.screenY;
+              state.currentMode = 'panning';
+              modeStatusText.textContent = 'パン中';
+            } else if (state.activeTouches.size === 0) {
+              state.twoFingerStartCenter = null;
+              state.swipeTriggered = false;
+              if (state.currentMode === 'zooming' || state.currentMode === 'panning') {
+                state.currentMode = 'idle';
+                modeStatusText.textContent = '待機中';
+                redrawInkCanvas();
+                renderOverlay();
+              }
+            }
+          }
+
+          if (state.activePenId !== e.pointerId) return;
+
+          if (state.currentMode === 'dragging_selection' || state.currentMode === 'scaling_selection') {
+            if (state.dragOriginalPositions) {
+              const afterMap = new Map();
+              const selectedStrokes = state.strokes.filter(s => state.selectedStrokeIds.has(s.id));
+              for (const s of selectedStrokes) {
+                afterMap.set(s.id, {
+                  points: s.points.map(p => ({ ...p })),
+                  bbox: { ...s.bbox }
+                });
+              }
+              executeAction({
+                type: 'move_strokes',
+                beforeMap: state.dragOriginalPositions,
+                afterMap: afterMap
+              });
+            }
+            state.dragOriginalPositions = null;
+            state.dragStartPos = null;
+            state.scaleHandle = null;
+            state.currentMode = 'idle';
+            modeStatusText.textContent = '待機中';
+            redrawInkCanvas();
+            renderOverlay();
+            state.activePenId = null; // リセット
+            return;
+          }
+
+          if (state.holdTimer) { clearTimeout(state.holdTimer); state.holdTimer = null; }
+          
+          const mode = state.currentMode;
+          const pts = state.currentPenPoints;
+
+          if (mode === 'lasso_erase') {
+            if (pts.length > 2) {
+              const hitStrokeIds = findStrokesInsideLasso(pts);
+              if (hitStrokeIds.size > 0) {
+                const deletedStrokes = state.strokes.filter(s => hitStrokeIds.has(s.id));
+                state.strokes = state.strokes.filter(s => !hitStrokeIds.has(s.id));
+                executeAction({ type: 'delete_strokes', strokes: deletedStrokes });
+                showToast(`なげなわ消去: ${deletedStrokes.length}本削除`, '🗑️');
+              }
+            }
+            modeStatusText.textContent = '待機中';
+          }
+          else if (mode === 'lasso_select') {
+            if (pts.length > 2) {
+              const hitStrokeIds = findStrokesInsideLasso(pts);
+              state.selectedStrokeIds = hitStrokeIds;
+              updateSelectionUI();
+              if (hitStrokeIds.size > 0) {
+                showToast(`${hitStrokeIds.size}件選択しました`, '✨');
+              }
+            }
+            modeStatusText.textContent = '待機中';
+          }
+          else if (mode === 'quick_shape_adjust') {
+            if (state.quickShapeBase && pts.length > 0) {
+              const newStroke = {
+                id: 'stroke_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7),
+                points: pts.map(p => ({ ...p })),
+                color: state.color,
+                width: state.baseWidth,
+                penType: state.penType,
+                bbox: calculateBBox(pts)
+              };
+              state.strokes.push(newStroke);
+              executeAction({ type: 'add_stroke', stroke: newStroke });
+              showToast('図形を確定しました', '✨');
+            }
+            modeStatusText.textContent = '待機中';
+          }
+          else if (mode === 'pen_draw') {
+            if (pts.length > 1) {
+              const scratchResult = detectScratchGesture(pts);
+              if (scratchResult && scratchResult.isScratch) {
+                const hitStrokeIds = findStrokesIntersectingScratch(scratchResult.recentPoints, scratchResult.bbox);
+                if (hitStrokeIds.size > 0) {
+                  const deletedStrokes = state.strokes.filter(s => hitStrokeIds.has(s.id));
+                  state.strokes = state.strokes.filter(s => !hitStrokeIds.has(s.id));
+                  executeAction({ type: 'delete_strokes', strokes: deletedStrokes });
+                  showToast(`⚡ スクラッチ消去: ${deletedStrokes.length}本削除`, '⚡');
+                }
+              } else {
+                const newStroke = {
+                  id: 'stroke_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7),
+                  points: pts.map(p => ({ ...p })),
+                  color: state.color,
+                  width: state.baseWidth,
+                  penType: state.penType,
+                  bbox: calculateBBox(pts)
+                };
+                state.strokes.push(newStroke);
+                executeAction({ type: 'add_stroke', stroke: newStroke });
+              }
+            }
+            modeStatusText.textContent = '待機中';
+          }
+
+          state.activePenId = null;
+          state.currentPenPoints = [];
+          state.currentMode = 'idle';
+          redrawInkCanvas();
+          renderOverlay();
+        }
+
+        // --- UIコントロールのイベントリスナー設定 ---
+
+        cloudSyncBtn.addEventListener('click', requestGoogleDriveSync);
+
+        function openNewNotebookModal() {
+          const suggested = `ノート ${state.notebooks.length + 1}`;
+          newNotebookName.value = suggested;
+          newNotebookModal.classList.add('open');
+          newNotebookModal.setAttribute('aria-hidden', 'false');
+          // iPadOSでソフトキーボードを確実に開くため、タップと同期的にフォーカスする。
+          newNotebookName.focus({ preventScroll: true });
+          newNotebookName.select();
+        }
+
+        function closeNewNotebookModal() {
+          newNotebookModal.classList.remove('open');
+          newNotebookModal.setAttribute('aria-hidden', 'true');
+          newNotebookName.blur();
+          createNotebookBtn.focus({ preventScroll: true });
+        }
+
+        createNotebookBtn.addEventListener('click', openNewNotebookModal);
+        cancelNotebookBtn.addEventListener('click', closeNewNotebookModal);
+        newNotebookModal.addEventListener('pointerdown', event => {
+          if (event.target === newNotebookModal) closeNewNotebookModal();
+        });
+        newNotebookForm.addEventListener('submit', event => {
+          event.preventDefault();
+          const suggested = `ノート ${state.notebooks.length + 1}`;
+          const entered = newNotebookName.value.trim();
+          const page = makePage();
+          const notebook = {
+            id: makeId('notebook'),
+            title: entered || suggested,
+            coverColor: COVER_COLORS[state.notebooks.length % COVER_COLORS.length],
+            pages: [page]
+          };
+          state.notebooks.push(notebook);
+          state.currentNotebookId = notebook.id;
+          state.currentPageId = page.id;
+          state.activePageIndex = 0;
+          newNotebookModal.classList.remove('open');
+          newNotebookModal.setAttribute('aria-hidden', 'true');
+          newNotebookName.blur();
+          saveLibraryNow();
+          setViewMode('notebook');
+        });
+
+        backToHomeBtn.addEventListener('click', () => setViewMode('home'));
+        closeEditorBtn.addEventListener('click', () => setViewMode('notebook'));
+        openPageBtn.addEventListener('click', openActivePage);
+        addPageBtn.addEventListener('click', () => {
+          const notebook = state.currentNotebook;
+          if (!notebook) return;
+          const page = makePage();
+          notebook.pages.push(page);
+          state.activePageIndex = notebook.pages.length - 1;
+          state.currentPageId = page.id;
+          renderNotebook();
+          saveLibraryNow();
+        });
+
+        let pageDrag = null;
+        pageStage.addEventListener('pointerdown', (event) => {
+          if (event.pointerType === 'mouse' && event.button !== 0) return;
+          event.preventDefault();
+          pageDrag = {
+            id: event.pointerId,
+            startX: event.clientX,
+            x: event.clientX,
+            startTime: performance.now(),
+            tappedActiveCard: Boolean(event.target.closest?.('.page-card.active'))
+          };
+          pageStage.setPointerCapture?.(event.pointerId);
+        });
+        pageStage.addEventListener('pointermove', (event) => {
+          if (!pageDrag || event.pointerId !== pageDrag.id) return;
+          event.preventDefault();
+          pageDrag.x = event.clientX;
+          const progress = Math.max(-.9, Math.min(.9, (event.clientX - pageDrag.startX) / Math.max(260, pageStage.clientWidth * .45)));
+          updatePageTransforms(progress);
+        });
+        const finishPageDrag = (event) => {
+          if (!pageDrag || event.pointerId !== pageDrag.id) return;
+          const drag = pageDrag;
+          pageDrag = null;
+          const deltaX = event.clientX - drag.startX;
+          const elapsed = Math.max(1, performance.now() - drag.startTime);
+          const velocity = deltaX / elapsed;
+          if (deltaX < -55 || velocity < -.55) selectPage(state.activePageIndex + 1);
+          else if (deltaX > 55 || velocity > .55) selectPage(state.activePageIndex - 1);
+          else {
+            updatePageTransforms(0);
+            if (Math.abs(deltaX) < 10 && drag.tappedActiveCard) openActivePage();
+          }
+        };
+        pageStage.addEventListener('pointerup', finishPageDrag);
+        pageStage.addEventListener('pointercancel', () => { pageDrag = null; updatePageTransforms(0); });
+
+        // ペン種別ピッカー
+        document.querySelectorAll('#penTypeGroup .width-pill').forEach(btn => {
+          btn.addEventListener('click', () => {
+            state.penSettings[state.penType] = { color: state.color, width: state.baseWidth };
+            
+            document.querySelectorAll('#penTypeGroup .width-pill').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            state.penType = btn.dataset.type;
+            
+            const nextSettings = state.penSettings[state.penType];
+            state.color = nextSettings.color;
+            state.baseWidth = nextSettings.width;
+            
+            document.querySelectorAll('#colorPickerGroup .color-dot').forEach(el => {
+              el.classList.toggle('active', el.dataset.color === state.color);
+            });
+            document.querySelectorAll('#widthPickerGroup .width-pill').forEach(el => {
+              el.classList.toggle('active', parseFloat(el.dataset.width) === state.baseWidth);
+            });
+          });
+        });
+
+        // カラーピッカー
+        document.querySelectorAll('#colorPickerGroup .color-dot').forEach(dot => {
+          dot.addEventListener('click', () => {
+            document.querySelectorAll('#colorPickerGroup .color-dot').forEach(d => d.classList.remove('active'));
+            dot.classList.add('active');
+            state.color = dot.dataset.color;
+            state.penSettings[state.penType].color = state.color;
+          });
+        });
+
+        // 線幅ピッカー
+        document.querySelectorAll('#widthPickerGroup .width-pill').forEach(pill => {
+          pill.addEventListener('click', () => {
+            document.querySelectorAll('#widthPickerGroup .width-pill').forEach(p => p.classList.remove('active'));
+            pill.classList.add('active');
+            state.baseWidth = parseFloat(pill.dataset.width);
+            state.penSettings[state.penType].width = state.baseWidth;
+          });
+        });
+
+        // 筆圧感知トグル
+        pressureToggle.addEventListener('click', () => {
+          state.usePressure = !state.usePressure;
+          pressureToggle.classList.toggle('active', state.usePressure);
+          showToast(`筆圧感知: ${state.usePressure ? 'ON (有効)' : 'OFF (無効)'}`, '🖊️');
+        });
+
+        // Undo / Redo ボタン
+        undoBtn.addEventListener('click', () => {
+          undo();
+          showToast('元に戻す (Undo)', '↩');
+        });
+        redoBtn.addEventListener('click', () => {
+          redo();
+          showToast('やり直す (Redo)', '↪');
+        });
+
+        // 全消去
+        clearBtn.addEventListener('click', () => {
+          if (state.strokes.length === 0) return;
+          const allStrokes = [...state.strokes];
+          state.strokes = [];
+          state.selectedStrokeIds.clear();
+          executeAction({
+            type: 'delete_strokes',
+            strokes: allStrokes
+          });
+          updateSelectionUI();
+          redrawInkCanvas();
+          renderOverlay();
+          showToast('すべてのストロークを消去しました', '🗑️');
+        });
+
+        // PNG画像エクスポート
+        exportBtn.addEventListener('click', () => {
+          if (state.strokes.length === 0) {
+            showToast('書き出すストロークがありません', 'ℹ️');
+            return;
+          }
+          const offscreen = document.createElement('canvas');
+          offscreen.width = inkCanvas.width;
+          offscreen.height = inkCanvas.height;
+          const oCtx = offscreen.getContext('2d');
+          oCtx.fillStyle = '#ffffff';
+          oCtx.fillRect(0, 0, offscreen.width, offscreen.height);
+          
+          // 方眼グリッド背景
+          oCtx.strokeStyle = '#e2e8f0';
+          oCtx.lineWidth = 1 * dpr;
+          const gridSize = 28 * dpr;
+          for (let x = 0; x < offscreen.width; x += gridSize) {
+            oCtx.beginPath(); oCtx.moveTo(x, 0); oCtx.lineTo(x, offscreen.height); oCtx.stroke();
+          }
+          for (let y = 0; y < offscreen.height; y += gridSize) {
+            oCtx.beginPath(); oCtx.moveTo(0, y); oCtx.lineTo(offscreen.width, y); oCtx.stroke();
+          }
+
+          // インク描画
+          oCtx.drawImage(inkCanvas, 0, 0);
+
+          const link = document.createElement('a');
+          link.download = `inknote_${new Date().toISOString().slice(0, 10)}.png`;
+          link.href = offscreen.toDataURL('image/png');
+          link.click();
+          showToast('PNG画像として保存しました', '💾');
+        });
+
+        // なげなわ消去モード手動トグル（Sペンボタン/Apple Pencil未対応環境の代用）
+        lassoEraserToggle.addEventListener('click', () => {
+          state.isLassoEraserModeToggle = !state.isLassoEraserModeToggle;
+          lassoEraserToggle.classList.toggle('active', state.isLassoEraserModeToggle);
+          if (state.isLassoEraserModeToggle) {
+            showToast('なげなわ消去モード: ON (囲んだ線を消去)', '⭕');
+          } else {
+            showToast('なげなわ消去モード: OFF (通常描画)', '🖊️');
+          }
+        });
+
+        // 2本指シミュレーター（PCでのテスト用）
+        twoFingerSimToggle.addEventListener('click', () => {
+          state.isTwoFingerSimulated = !state.isTwoFingerSimulated;
+          twoFingerSimToggle.classList.toggle('active', state.isTwoFingerSimulated);
+          if (state.isTwoFingerSimulated) {
+            showToast('2本指ホールド中（ペンで囲むと選択状態になります）', '✌️');
+          } else {
+            showToast('2本指ホールド解除', '👆');
+          }
+        });
+
+        // 選択ストロークの削除
+        selectionDeleteBtn.addEventListener('click', () => {
+          if (state.selectedStrokeIds.size === 0) return;
+          const deleted = state.strokes.filter(s => state.selectedStrokeIds.has(s.id));
+          state.strokes = state.strokes.filter(s => !state.selectedStrokeIds.has(s.id));
+          executeAction({
+            type: 'delete_strokes',
+            strokes: deleted
+          });
+          state.selectedStrokeIds.clear();
+          updateSelectionUI();
+          redrawInkCanvas();
+          renderOverlay();
+          showToast(`選択した${deleted.length}件のストロークを削除しました`, '🗑️');
+        });
+
+        // 選択解除
+        selectionDeselectBtn.addEventListener('click', () => {
+          state.selectedStrokeIds.clear();
+          updateSelectionUI();
+          redrawInkCanvas();
+          renderOverlay();
+        });
+
+        // ガイドモーダル
+        helpBtn.addEventListener('click', () => guideModal.classList.add('open'));
+        closeGuideBtn.addEventListener('click', () => guideModal.classList.remove('open'));
+        confirmGuideBtn.addEventListener('click', () => guideModal.classList.remove('open'));
+        guideModal.addEventListener('click', (e) => {
+          if (e.target === guideModal) guideModal.classList.remove('open');
+        });
+
+        // キーボードショートカット（Undo: Cmd/Ctrl+Z, Redo: Cmd/Ctrl+Shift+Z or Ctrl+Y）
+        window.addEventListener('keydown', (e) => {
+          if (state.viewMode !== 'editing') return;
+          if ((e.metaKey || e.ctrlKey) && e.key === 'z') {
+            e.preventDefault();
+            if (e.shiftKey) {
+              redo();
+            } else {
+              undo();
+            }
+          } else if ((e.metaKey || e.ctrlKey) && e.key === 'y') {
+            e.preventDefault();
+            redo();
+          } else if (e.key === 'Delete' || e.key === 'Backspace') {
+            if (state.selectedStrokeIds.size > 0) {
+              e.preventDefault();
+              selectionDeleteBtn.click();
+            }
+          }
+        });
+
+        // Phase 2 初期化：保存済み階層を復元し、本棚から開始する。
+        loadLibrary();
+        setViewMode('home', { skipCapture: true });
+        initializeGoogleDrive();
+        initializePwa();
+        registerServiceWorker();
+        window.addEventListener('pagehide', () => {
+          if (state.viewMode === 'editing') captureCurrentPageThumbnail();
+          saveLibraryNow();
+        });
+
+      })();
+    </script>
+  </body>
+</html>
