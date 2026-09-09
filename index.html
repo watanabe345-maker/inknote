@@ -894,7 +894,7 @@
         </div>
       </div>
 
-      <div id="penSignalBadge" role="status" aria-live="polite">入力診断 v6：端末判定中</div>
+      <div id="penSignalBadge" role="status" aria-live="polite">入力診断 v7：端末判定中</div>
 
       <!-- 2本指シミュレーター（マウスや単一ポインタ環境でテスト用） -->
       <button id="twoFingerSimToggle" title="PCマウスで「2本指タップ＋囲み選択」や「スワイプ」をテスト">
@@ -1160,7 +1160,7 @@
         const ANDROID_PALM_CONTACT_SIZE = 36;
         const ANDROID_TOUCH_INTENT_DELAY_MS = 160;
         const ANDROID_MIN_TWO_FINGER_SPREAD = 150;
-        penSignalBadge.textContent = `入力診断 v6：パーム保護 ${USE_STRICT_PALM_GUARD ? 'ON' : 'OFF'}`;
+        penSignalBadge.textContent = `入力診断 v7：パーム保護 ${USE_STRICT_PALM_GUARD ? 'ON' : 'OFF'}`;
         let saveTimer = null;
         let storageWarningShown = false;
         const deletedNotebookIds = new Set();
@@ -3245,8 +3245,9 @@
 
           // QuickShape ドラッグ調整中
           if (state.currentMode === 'quick_shape_adjust') {
-            const dx = x - state.quickShapeBase.bbox.centerX;
-            const dy = y - state.quickShapeBase.bbox.centerY;
+            const shapeCenter = state.quickShapeBase.center;
+            const dx = x - shapeCenter.x;
+            const dy = y - shapeCenter.y;
             const scale = Math.max(0.1, Math.hypot(dx, dy) / 50);
             const rotation = Math.atan2(dy, dx);
             state.currentPenPoints = generateShapePoints(state.quickShapeBase, scale, rotation);
@@ -3418,14 +3419,19 @@
           }
           else if (mode === 'quick_shape_adjust') {
             if (state.quickShapeBase && pts.length > 0) {
+              const finalizedPoints = pts.every(point =>
+                Number.isFinite(point.x) && Number.isFinite(point.y)
+              )
+                ? pts
+                : generateShapePoints(state.quickShapeBase, 1, 0);
               const newStroke = {
                 id: 'stroke_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7),
-                points: pts.map(p => ({ ...p })),
+                points: finalizedPoints.map(p => ({ ...p })),
                 color: state.color,
                 width: state.baseWidth,
                 penType: state.penType,
                 shapeType: state.quickShapeBase.type,
-                bbox: calculateBBox(pts)
+                bbox: calculateBBox(finalizedPoints)
               };
               state.strokes.push(newStroke);
               executeAction({ type: 'add_stroke', stroke: newStroke });
