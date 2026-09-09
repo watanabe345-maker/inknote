@@ -894,7 +894,7 @@
         </div>
       </div>
 
-      <div id="penSignalBadge" role="status" aria-live="polite">入力診断 v7：端末判定中</div>
+      <div id="penSignalBadge" role="status" aria-live="polite">入力診断 v8：端末判定中</div>
 
       <!-- 2本指シミュレーター（マウスや単一ポインタ環境でテスト用） -->
       <button id="twoFingerSimToggle" title="PCマウスで「2本指タップ＋囲み選択」や「スワイプ」をテスト">
@@ -1160,7 +1160,7 @@
         const ANDROID_PALM_CONTACT_SIZE = 36;
         const ANDROID_TOUCH_INTENT_DELAY_MS = 160;
         const ANDROID_MIN_TWO_FINGER_SPREAD = 150;
-        penSignalBadge.textContent = `入力診断 v7：パーム保護 ${USE_STRICT_PALM_GUARD ? 'ON' : 'OFF'}`;
+        penSignalBadge.textContent = `入力診断 v8：パーム保護 ${USE_STRICT_PALM_GUARD ? 'ON' : 'OFF'}`;
         let saveTimer = null;
         let storageWarningShown = false;
         const deletedNotebookIds = new Set();
@@ -3246,10 +3246,19 @@
           // QuickShape ドラッグ調整中
           if (state.currentMode === 'quick_shape_adjust') {
             const shapeCenter = state.quickShapeBase.center;
+            const startPointer = state.quickShapeStartPtr;
             const dx = x - shapeCenter.x;
             const dy = y - shapeCenter.y;
-            const scale = Math.max(0.1, Math.hypot(dx, dy) / 50);
-            const rotation = Math.atan2(dy, dx);
+            const startDx = startPointer.x - shapeCenter.x;
+            const startDy = startPointer.y - shapeCenter.y;
+            const startDistance = Math.max(1, Math.hypot(startDx, startDy));
+            const pointerMovement = Math.hypot(x - startPointer.x, y - startPointer.y);
+            const scale = pointerMovement < 6
+              ? 1
+              : Math.max(0.1, Math.hypot(dx, dy) / startDistance);
+            const rotation = state.quickShapeBase.type === 'rectangle' || pointerMovement < 6
+              ? 0
+              : Math.atan2(dy, dx) - Math.atan2(startDy, startDx);
             state.currentPenPoints = generateShapePoints(state.quickShapeBase, scale, rotation);
             renderOverlay();
             return;
