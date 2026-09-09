@@ -192,33 +192,15 @@
         border-radius: 9999px;
       }
 
-      /* 右上：補助なげなわ消去フローティングボタン（ペンボタン未対応環境用） */
-      #lassoEraserToggle {
-        position: absolute;
-        top: 14px;
-        right: 14px;
-        z-index: 10;
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        background: var(--card-bg);
-        border: 1px solid var(--border-color);
-        backdrop-filter: blur(10px);
-        padding: 8px 14px;
-        border-radius: 12px;
-        box-shadow: 0 4px 14px rgba(0, 0, 0, 0.08);
-        cursor: pointer;
-        font-size: 13px;
-        font-weight: 600;
-        color: #475569;
-        transition: all 0.2s ease;
-      }
-
       #lassoEraserToggle.active {
         background: #fef2f2;
         border-color: #f87171;
         color: #dc2626;
-        box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.2), 0 4px 14px rgba(239, 68, 68, 0.15);
+      }
+      #eraserAutoReturnToggle.active {
+        background:#ecfdf5;
+        border-color:#a7f3d0;
+        color:#047857;
       }
 
       /* 画面下部ステータス＆ジェスチャーモニター */
@@ -521,13 +503,16 @@
       .notebook-tile { background: none; border: 0; color: inherit; text-align: left; cursor: pointer; min-width: 0; }
       .notebook-tile-wrap { position:relative; min-width:0; }
       .notebook-tile-wrap .notebook-tile { display:block; width:100%; }
-      .delete-notebook-btn {
-        position:absolute; right:7px; bottom:24px; z-index:2;
+      .delete-notebook-btn, .edit-notebook-btn {
+        position:absolute; bottom:24px; z-index:2;
         width:38px; height:38px; border-radius:50%; border:1px solid rgba(255,255,255,.16);
         color:#d8e1e8; background:rgba(7,13,18,.38); backdrop-filter:blur(8px);
         -webkit-backdrop-filter:blur(8px); cursor:pointer; touch-action:manipulation;
       }
+      .delete-notebook-btn { right:7px; }
+      .edit-notebook-btn { right:53px; }
       .delete-notebook-btn:active { transform:scale(.94); background:rgba(185,28,28,.72); }
+      .edit-notebook-btn:active { transform:scale(.94); background:rgba(37,99,235,.72); }
       .delete-notebook-btn:disabled { opacity:.3; cursor:not-allowed; }
       .notebook-cover {
         aspect-ratio: 4 / 5;
@@ -538,8 +523,15 @@
         overflow: hidden;
       }
       .notebook-tile:active .notebook-cover { transform: translateY(3px) rotateY(-4deg); }
-      .notebook-cover::before { content:""; position:absolute; inset:0 auto 0 0; width:12%; background:rgba(0,0,0,.16); box-shadow:inset -1px 0 rgba(255,255,255,.2); }
-      .notebook-cover::after { content:""; position:absolute; inset:8% 9% auto 16%; height:26%; border:1px solid rgba(255,255,255,.28); border-radius:4px; background:rgba(255,255,255,.1); }
+      .notebook-cover::before { content:""; position:absolute; z-index:0; inset:0 auto 0 0; width:12%; background:rgba(0,0,0,.16); box-shadow:inset -1px 0 rgba(255,255,255,.2); }
+      .notebook-cover::after { content:""; position:absolute; z-index:0; inset:8% 9% auto 16%; height:26%; border:1px solid rgba(255,255,255,.28); border-radius:4px; background:rgba(255,255,255,.1); }
+      .notebook-cover-title {
+        position:absolute; z-index:1; top:11%; left:19%; right:12%; min-height:20%;
+        display:flex; align-items:center; justify-content:center; padding:8px;
+        color:#fff; text-align:center; overflow-wrap:anywhere;
+        font:750 clamp(14px, 2.2vw, 21px)/1.25 system-ui;
+        text-shadow:0 1px 3px rgba(0,0,0,.4);
+      }
       .notebook-name { font-size: 16px; font-weight: 700; margin-top: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
       .notebook-meta { color:#9facb8; font-size:12px; margin-top:4px; }
       #emptyLibrary { grid-column:1/-1; color:#a8b4bf; text-align:center; padding:14vh 20px; }
@@ -603,8 +595,6 @@
         .page-card { width:min(76vw, 520px); height:min(64vh, 700px); }
         .notebook-header-center { max-width:40vw; }
         #topToolbar { left:72px; right:10px; transform:none; max-width:none; }
-        #lassoEraserToggle { top:62px; }
-        #lassoEraserToggle span { display:none; }
         #statusBar { max-width:calc(100vw - 28px); overflow:hidden; }
       }
       @media (max-width:480px) {
@@ -660,6 +650,16 @@
         touch-action: manipulation;
       }
       #newNotebookName:focus { border-color: #2563eb; box-shadow: 0 0 0 4px rgba(37,99,235,.12); }
+      .cover-color-picker { display:flex; flex-wrap:wrap; gap:10px; margin-top:10px; }
+      .cover-color-option {
+        width:42px; height:42px; border-radius:50%; border:3px solid transparent;
+        box-shadow:0 0 0 1px rgba(15,23,42,.14); cursor:pointer; touch-action:manipulation;
+      }
+      .cover-color-option.selected {
+        border-color:#fff;
+        box-shadow:0 0 0 3px #2563eb;
+        transform:scale(1.04);
+      }
       .new-notebook-actions { display:flex; justify-content:flex-end; gap:9px; margin-top:20px; }
       .dialog-btn {
         min-height: 44px;
@@ -714,12 +714,14 @@
     <div id="newNotebookModal" role="dialog" aria-modal="true" aria-labelledby="newNotebookTitle" aria-hidden="true">
       <form id="newNotebookForm" class="new-notebook-card" autocomplete="off">
         <h2 id="newNotebookTitle">新しいノート</h2>
-        <p>ノート名はあとで変更できます。</p>
+        <p id="notebookDialogDescription">ノート名と表紙を選んでください。</p>
         <label for="newNotebookName" style="display:block;font-size:13px;font-weight:700;margin-bottom:7px;">ノート名</label>
         <input id="newNotebookName" name="notebookName" type="text" maxlength="60" enterkeyhint="done" required />
+        <label style="display:block;font-size:13px;font-weight:700;margin-top:18px;">表紙の色</label>
+        <div id="notebookColorPicker" class="cover-color-picker" role="radiogroup" aria-label="表紙の色"></div>
         <div class="new-notebook-actions">
           <button id="cancelNotebookBtn" class="dialog-btn secondary" type="button">キャンセル</button>
-          <button class="dialog-btn primary" type="submit">作成</button>
+          <button id="saveNotebookBtn" class="dialog-btn primary" type="submit">作成</button>
         </div>
       </form>
     </div>
@@ -760,6 +762,19 @@
         <div class="tool-btn-group" id="penTypeGroup">
           <div class="width-pill active" data-type="normal" title="通常ペン">🖊️</div>
           <div class="width-pill" data-type="marker" title="マーカー">🖍️</div>
+        </div>
+
+        <div class="tool-separator"></div>
+
+        <!-- なげなわ消しゴム -->
+        <div class="tool-btn-group" id="eraserToolGroup">
+          <button class="tool-btn" id="lassoEraserToggle" type="button" aria-pressed="false" title="囲んだストロークを消去">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m7 21-4-4L14 6l4 4L7 21Z"/><path d="m11 10 4 4"/><path d="M7 21h10"/></svg>
+            <span>消しゴム</span>
+          </button>
+          <button class="tool-btn active" id="eraserAutoReturnToggle" type="button" aria-pressed="true" title="消去後に元のペンへ戻る">
+            <span>↩ ペンへ戻る</span>
+          </button>
         </div>
 
         <div class="tool-separator"></div>
@@ -825,12 +840,6 @@
           <span>操作ガイド</span>
         </button>
       </header>
-
-      <!-- 右上：なげなわ消去モード手動トグルボタン（Sペンボタン/Apple Pencil未対応環境の補助） -->
-      <button id="lassoEraserToggle" title="スタイラスのサイドボタンを押すか、このボタンでなげなわ消去">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v18"/><path d="m19 9-7 7-7-7"/></svg>
-        <span>なげなわ消去モード</span>
-      </button>
 
       <!-- 選択ストロークの操作フローティングバー -->
       <div id="selectionActionBar">
@@ -902,7 +911,7 @@
             <div class="gesture-icon">⭕</div>
             <div>
               <div class="gesture-name">2. なげなわ消去（ペンボタン検知）</div>
-              <div class="gesture-desc">Sペンのサイドボタン（またはApple Pencil Proのスクイーズ / 画面右上のトグル）を押しながら線で囲むと、囲まれたストロークを一括削除します。</div>
+              <div class="gesture-desc">Sペンのサイドボタン（またはApple Pencil Proのスクイーズ / ツールバーの消しゴム）を使って線で囲むと、囲まれたストロークを一括削除します。</div>
             </div>
           </div>
 
@@ -942,6 +951,7 @@
           id: makeId('notebook'),
           title: 'マイノート',
           coverColor: '#315f72',
+          updatedAt: Date.now(),
           pages: [initialPage]
         };
         const state = {
@@ -961,6 +971,7 @@
           penType: 'normal',
           usePressure: true,
           isLassoEraserModeToggle: false,
+          returnToPenAfterErase: true,
           isTwoFingerSimulated: false,
           // 入力追跡
           camera: { x: 0, y: 0, zoom: 1 },
@@ -1018,6 +1029,7 @@
         const overlayCtx = overlayCanvas.getContext('2d');
 
         const lassoEraserToggle = document.getElementById('lassoEraserToggle');
+        const eraserAutoReturnToggle = document.getElementById('eraserAutoReturnToggle');
         const twoFingerSimToggle = document.getElementById('twoFingerSimToggle');
         const undoBtn = document.getElementById('undoBtn');
         const redoBtn = document.getElementById('redoBtn');
@@ -1063,7 +1075,11 @@
         const cloudSyncBtn = document.getElementById('cloudSyncBtn');
         const newNotebookModal = document.getElementById('newNotebookModal');
         const newNotebookForm = document.getElementById('newNotebookForm');
+        const newNotebookTitle = document.getElementById('newNotebookTitle');
+        const notebookDialogDescription = document.getElementById('notebookDialogDescription');
         const newNotebookName = document.getElementById('newNotebookName');
+        const notebookColorPicker = document.getElementById('notebookColorPicker');
+        const saveNotebookBtn = document.getElementById('saveNotebookBtn');
         const cancelNotebookBtn = document.getElementById('cancelNotebookBtn');
         const confirmModal = document.getElementById('confirmModal');
         const confirmTitle = document.getElementById('confirmTitle');
@@ -1186,6 +1202,7 @@
               id: notebook.id,
               title: notebook.title,
               coverColor: notebook.coverColor,
+              updatedAt: Number(notebook.updatedAt) || 0,
               pages: notebook.pages.map(page => ({
                 id: page.id,
                 strokes: page.strokes,
@@ -1201,6 +1218,7 @@
             id: notebook.id || makeId('notebook'),
             title: notebook.title || '無題のノート',
             coverColor: notebook.coverColor || COVER_COLORS[0],
+            updatedAt: Number(notebook.updatedAt) || 0,
             pages: (Array.isArray(notebook.pages) && notebook.pages.length ? notebook.pages : [makePage()]).map(page => ({
               id: page.id || makeId('page'),
               strokes: Array.isArray(page.strokes) ? page.strokes : [],
@@ -1250,7 +1268,13 @@
                 mergedPages.set(remotePage.id, remotePage);
               }
             });
-            mergedNotebooks.set(remoteNotebook.id, { ...remoteNotebook, pages: Array.from(mergedPages.values()) });
+            const useRemoteMetadata =
+              (Number(remoteNotebook.updatedAt) || 0) > (Number(localNotebook.updatedAt) || 0);
+            const notebookMetadata = useRemoteMetadata ? remoteNotebook : localNotebook;
+            mergedNotebooks.set(remoteNotebook.id, {
+              ...notebookMetadata,
+              pages: Array.from(mergedPages.values())
+            });
           });
           state.notebooks = Array.from(mergedNotebooks.values());
           const localNotebookStillExists = state.notebooks.some(n => n.id === localNotebookId);
@@ -1453,12 +1477,14 @@
             if (!raw) return;
             const parsed = JSON.parse(raw);
             if (!Array.isArray(parsed.notebooks) || parsed.notebooks.length === 0) return;
+            state.returnToPenAfterErase = parsed.returnToPenAfterErase !== false;
             (parsed.deletedNotebookIds || []).forEach(id => deletedNotebookIds.add(id));
             (parsed.deletedPageIds || []).forEach(id => deletedPageIds.add(id));
             state.notebooks = parsed.notebooks.map(n => ({
               id: n.id || makeId('notebook'),
               title: n.title || '無題のノート',
               coverColor: n.coverColor || COVER_COLORS[0],
+              updatedAt: Number(n.updatedAt) || 0,
               pages: (Array.isArray(n.pages) && n.pages.length ? n.pages : [makePage()]).map(p => ({
                 id: p.id || makeId('page'),
                 strokes: Array.isArray(p.strokes) ? p.strokes : [],
@@ -1484,10 +1510,11 @@
           const makeSerializableLibrary = includeThumbnails => ({
             currentNotebookId: state.currentNotebookId,
             currentPageId: state.currentPageId,
+            returnToPenAfterErase: state.returnToPenAfterErase,
             deletedNotebookIds: Array.from(deletedNotebookIds),
             deletedPageIds: Array.from(deletedPageIds),
             notebooks: state.notebooks.map(n => ({
-              id: n.id, title: n.title, coverColor: n.coverColor,
+              id: n.id, title: n.title, coverColor: n.coverColor, updatedAt: Number(n.updatedAt) || 0,
               pages: n.pages.map(p => ({
                 id: p.id,
                 strokes: p.strokes,
@@ -1607,6 +1634,10 @@
             const cover = document.createElement('div');
             cover.className = 'notebook-cover';
             cover.style.background = `linear-gradient(145deg, rgba(255,255,255,.2), transparent 42%), ${notebook.coverColor}`;
+            const coverTitle = document.createElement('div');
+            coverTitle.className = 'notebook-cover-title';
+            coverTitle.textContent = notebook.title;
+            cover.appendChild(coverTitle);
             const name = document.createElement('div');
             name.className = 'notebook-name';
             name.textContent = notebook.title;
@@ -1615,6 +1646,16 @@
             meta.textContent = `${notebook.pages.length} ページ`;
             tile.append(cover, name, meta);
             tile.addEventListener('click', () => openNotebook(notebook.id));
+            const editButton = document.createElement('button');
+            editButton.type = 'button';
+            editButton.className = 'edit-notebook-btn';
+            editButton.textContent = '✏️';
+            editButton.setAttribute('aria-label', `${notebook.title}を編集`);
+            editButton.title = 'ノート名と表紙を編集';
+            editButton.addEventListener('click', event => {
+              event.stopPropagation();
+              openEditNotebookModal(notebook.id);
+            });
             const deleteButton = document.createElement('button');
             deleteButton.type = 'button';
             deleteButton.className = 'delete-notebook-btn';
@@ -1626,7 +1667,7 @@
               event.stopPropagation();
               requestNotebookDeletion(notebook.id);
             });
-            wrapper.append(tile, deleteButton);
+            wrapper.append(tile, editButton, deleteButton);
             notebookGrid.appendChild(wrapper);
           });
         }
@@ -3040,7 +3081,15 @@
                 const deletedStrokes = state.strokes.filter(s => hitStrokeIds.has(s.id));
                 state.strokes = state.strokes.filter(s => !hitStrokeIds.has(s.id));
                 executeAction({ type: 'delete_strokes', strokes: deletedStrokes });
-                showToast(`なげなわ消去: ${deletedStrokes.length}本削除`, '🗑️');
+                const returnsToPen = state.returnToPenAfterErase && state.isLassoEraserModeToggle;
+                if (returnsToPen) {
+                  state.isLassoEraserModeToggle = false;
+                  updateEraserControls();
+                }
+                showToast(
+                  `なげなわ消去: ${deletedStrokes.length}本削除${returnsToPen ? '・ペンに戻りました' : ''}`,
+                  '🗑️'
+                );
               }
             }
             modeStatusText.textContent = '待機中';
@@ -3110,17 +3159,60 @@
 
         cloudSyncBtn.addEventListener('click', requestGoogleDriveSync);
 
-        function openNewNotebookModal() {
+        let editingNotebookId = null;
+        let selectedNotebookCoverColor = COVER_COLORS[0];
+
+        function selectNotebookCoverColor(color) {
+          selectedNotebookCoverColor = COVER_COLORS.includes(color) ? color : COVER_COLORS[0];
+          notebookColorPicker.querySelectorAll('.cover-color-option').forEach(button => {
+            const selected = button.dataset.color === selectedNotebookCoverColor;
+            button.classList.toggle('selected', selected);
+            button.setAttribute('aria-checked', String(selected));
+          });
+        }
+
+        function renderNotebookColorPicker() {
+          notebookColorPicker.replaceChildren();
+          COVER_COLORS.forEach((color, index) => {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'cover-color-option';
+            button.dataset.color = color;
+            button.style.background = color;
+            button.setAttribute('role', 'radio');
+            button.setAttribute('aria-label', `表紙色 ${index + 1}`);
+            button.addEventListener('click', () => selectNotebookCoverColor(color));
+            notebookColorPicker.appendChild(button);
+          });
+        }
+
+        function openNotebookDialog({ notebook = null } = {}) {
+          editingNotebookId = notebook?.id || null;
           const suggested = `ノート ${state.notebooks.length + 1}`;
-          newNotebookName.value = suggested;
+          newNotebookTitle.textContent = notebook ? 'ノートを編集' : '新しいノート';
+          notebookDialogDescription.textContent = notebook
+            ? 'ノート名と表紙の色を変更できます。'
+            : 'ノート名と表紙を選んでください。';
+          saveNotebookBtn.textContent = notebook ? '保存' : '作成';
+          newNotebookName.value = notebook?.title || suggested;
+          selectNotebookCoverColor(notebook?.coverColor || COVER_COLORS[state.notebooks.length % COVER_COLORS.length]);
           newNotebookModal.classList.add('open');
           newNotebookModal.setAttribute('aria-hidden', 'false');
-          // iPadOSでソフトキーボードを確実に開くため、タップと同期的にフォーカスする。
           newNotebookName.focus({ preventScroll: true });
           newNotebookName.select();
         }
 
+        function openNewNotebookModal() {
+          openNotebookDialog();
+        }
+
+        function openEditNotebookModal(notebookId) {
+          const notebook = state.notebooks.find(item => item.id === notebookId);
+          if (notebook) openNotebookDialog({ notebook });
+        }
+
         function closeNewNotebookModal() {
+          editingNotebookId = null;
           newNotebookModal.classList.remove('open');
           newNotebookModal.setAttribute('aria-hidden', 'true');
           newNotebookName.blur();
@@ -3136,23 +3228,37 @@
           event.preventDefault();
           const suggested = `ノート ${state.notebooks.length + 1}`;
           const entered = newNotebookName.value.trim();
+          if (editingNotebookId) {
+            const notebook = state.notebooks.find(item => item.id === editingNotebookId);
+            if (!notebook) return closeNewNotebookModal();
+            notebook.title = entered || '無題のノート';
+            notebook.coverColor = selectedNotebookCoverColor;
+            notebook.updatedAt = Date.now();
+            closeNewNotebookModal();
+            saveLibraryNow();
+            renderHome();
+            scheduleAuthorizedAutoSync(250);
+            showToast('ノート情報を更新しました', '📕');
+            return;
+          }
           const page = makePage();
           const notebook = {
             id: makeId('notebook'),
             title: entered || suggested,
-            coverColor: COVER_COLORS[state.notebooks.length % COVER_COLORS.length],
+            coverColor: selectedNotebookCoverColor,
+            updatedAt: Date.now(),
             pages: [page]
           };
           state.notebooks.push(notebook);
           state.currentNotebookId = notebook.id;
           state.currentPageId = page.id;
           state.activePageIndex = 0;
-          newNotebookModal.classList.remove('open');
-          newNotebookModal.setAttribute('aria-hidden', 'true');
-          newNotebookName.blur();
+          closeNewNotebookModal();
           saveLibraryNow();
           setViewMode('notebook');
         });
+
+        renderNotebookColorPicker();
 
         confirmCancelBtn.addEventListener('click', closeConfirmDialog);
         confirmModal.addEventListener('pointerdown', event => {
@@ -3250,6 +3356,10 @@
         document.querySelectorAll('#penTypeGroup .width-pill').forEach(btn => {
           btn.addEventListener('click', () => {
             state.penSettings[state.penType] = { color: state.color, width: state.baseWidth };
+            if (state.isLassoEraserModeToggle) {
+              state.isLassoEraserModeToggle = false;
+              updateEraserControls();
+            }
             
             document.querySelectorAll('#penTypeGroup .width-pill').forEach(b => b.classList.remove('active'));
             btn.classList.add('active');
@@ -3355,15 +3465,32 @@
           showToast('PNG画像として保存しました', '💾');
         });
 
-        // なげなわ消去モード手動トグル（Sペンボタン/Apple Pencil未対応環境の代用）
+        function updateEraserControls() {
+          lassoEraserToggle.classList.toggle('active', state.isLassoEraserModeToggle);
+          lassoEraserToggle.setAttribute('aria-pressed', String(state.isLassoEraserModeToggle));
+          eraserAutoReturnToggle.classList.toggle('active', state.returnToPenAfterErase);
+          eraserAutoReturnToggle.setAttribute('aria-pressed', String(state.returnToPenAfterErase));
+        }
+
+        // なげなわ消去をツールバーの消しゴムとして切り替える。
         lassoEraserToggle.addEventListener('click', () => {
           state.isLassoEraserModeToggle = !state.isLassoEraserModeToggle;
-          lassoEraserToggle.classList.toggle('active', state.isLassoEraserModeToggle);
+          updateEraserControls();
           if (state.isLassoEraserModeToggle) {
-            showToast('なげなわ消去モード: ON (囲んだ線を消去)', '⭕');
+            showToast('消しゴム: 囲んだ線を消去します', '⭕');
           } else {
-            showToast('なげなわ消去モード: OFF (通常描画)', '🖊️');
+            showToast('元のペンに戻りました', '🖊️');
           }
+        });
+
+        eraserAutoReturnToggle.addEventListener('click', () => {
+          state.returnToPenAfterErase = !state.returnToPenAfterErase;
+          updateEraserControls();
+          saveLibraryNow();
+          showToast(
+            `消去後にペンへ戻る: ${state.returnToPenAfterErase ? 'ON' : 'OFF'}`,
+            state.returnToPenAfterErase ? '↩' : '⭕'
+          );
         });
 
         // 2本指シミュレーター（PCでのテスト用）
@@ -3432,6 +3559,7 @@
 
         // Phase 2 初期化：保存済み階層を復元し、本棚から開始する。
         loadLibrary();
+        updateEraserControls();
         setViewMode('home', { skipCapture: true });
         initializeGoogleDrive();
         initializePwa();
