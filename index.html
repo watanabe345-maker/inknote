@@ -1185,6 +1185,10 @@
 
         function mergeCloudLibrary(remote) {
           if (!remote || !Array.isArray(remote.notebooks)) throw new Error('クラウドデータの形式が正しくありません');
+          // Drive側の「最後に開いていた位置」で、現在操作中の端末を切り替えない。
+          // 同期中にユーザーが別のノートを開いた場合も、そのローカル選択を保持する。
+          const localNotebookId = state.currentNotebookId;
+          const localPageId = state.currentPageId;
           (remote.deletedNotebookIds || []).forEach(id => deletedNotebookIds.add(id));
           (remote.deletedPageIds || []).forEach(id => deletedPageIds.add(id));
           const mergedNotebooks = new Map(
@@ -1208,12 +1212,17 @@
             mergedNotebooks.set(remoteNotebook.id, { ...remoteNotebook, pages: Array.from(mergedPages.values()) });
           });
           state.notebooks = Array.from(mergedNotebooks.values());
-          const preferredNotebookId = remote.currentNotebookId;
-          state.currentNotebookId = state.notebooks.some(n => n.id === preferredNotebookId)
-            ? preferredNotebookId : state.notebooks[0].id;
+          const localNotebookStillExists = state.notebooks.some(n => n.id === localNotebookId);
+          const remoteNotebookStillExists = state.notebooks.some(n => n.id === remote.currentNotebookId);
+          state.currentNotebookId = localNotebookStillExists
+            ? localNotebookId
+            : (remoteNotebookStillExists ? remote.currentNotebookId : state.notebooks[0].id);
           const notebook = state.currentNotebook;
-          state.currentPageId = notebook.pages.some(p => p.id === remote.currentPageId)
-            ? remote.currentPageId : notebook.pages[0].id;
+          const localPageStillExists = notebook.pages.some(p => p.id === localPageId);
+          const remotePageExistsHere = notebook.pages.some(p => p.id === remote.currentPageId);
+          state.currentPageId = localPageStillExists
+            ? localPageId
+            : (remotePageExistsHere ? remote.currentPageId : notebook.pages[0].id);
           state.activePageIndex = Math.max(0, notebook.pages.findIndex(p => p.id === state.currentPageId));
           saveLibraryNow();
           renderHome();
