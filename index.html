@@ -981,6 +981,8 @@
           rejectedTouchIds: new Set(),
           lastStylusTime: -Infinity,
           activePenId: null,
+          stylusButtonLatchUntil: -Infinity,
+          lastReportedPenButtons: null,
           currentPenPoints: [], // { x, y, pressure, time }
           currentMode: 'idle', // 'idle' | 'pen_draw' | 'lasso_erase' | 'lasso_select' | 'two_finger_swipe' | 'dragging_selection'
           // 既存コアの state.strokes 等は、現在ページへの透過的なアクセサとして維持する
@@ -1025,10 +1027,21 @@
         // secondary button (2) または eraser button (32) として通知する。
         function isStylusSideButtonPressed(event) {
           if (event.pointerType !== 'pen') return false;
-          return (event.buttons & 2) !== 0 ||
-            (event.buttons & 32) !== 0 ||
-            event.button === 2 ||
-            event.button === 5;
+          const buttons = Number(event.buttons) || 0;
+          const button = Number(event.button);
+          return (buttons & 0xfffffffe) !== 0 ||
+            button > 0 ||
+            performance.now() < state.stylusButtonLatchUntil;
+        }
+
+        function updatePenTelemetry(event) {
+          if (event.pointerType !== 'pen') return;
+          const signature = `${event.buttons}:${event.button}`;
+          if (signature === state.lastReportedPenButtons) return;
+          state.lastReportedPenButtons = signature;
+          pointerTypeText.textContent = 'Sペン';
+          pressureText.textContent = Number(event.pressure || 0).toFixed(2);
+          buttonsText.textContent = `${event.buttons} / ${event.button}`;
         }
 
         // --- DOM要素の取得 ---
@@ -2600,8 +2613,15 @@
         window.addEventListener('pointerup', handlePointerUp, { passive: false });
         window.addEventListener('pointercancel', handlePointerUp, { passive: false });
 
-        // iOS / iPadOS コンテキストメニューやスクロールを完全に抑止
-        window.addEventListener('contextmenu', (e) => e.preventDefault());
+        // iOS / iPadOS コンテキストメニューやスクロールを完全に抑止。
+        // AndroidブラウザがSペンのサイドボタンを右クリックとして渡す場合は、
+        // 次のペン接触を一時的な消しゴムとして扱う。
+        window.addEventListener('contextmenu', (e) => {
+          if (e.pointerType === 'pen' || e.button === 2) {
+            state.stylusButtonLatchUntil = performance.now() + 1200;
+          }
+          e.preventDefault();
+        });
         document.addEventListener('gesturestart', (e) => e.preventDefault());
         document.addEventListener('gesturechange', (e) => e.preventDefault());
         document.addEventListener('gestureend', (e) => e.preventDefault());
@@ -2618,6 +2638,7 @@
           const { x, y } = toWorld(screenX, screenY);
           const pressure = e.pressure || 0.5;
           const eventTime = performance.now();
+          updatePenTelemetry(e);
 
           if (e.pointerType === 'touch') {
             const stylusIsActive = state.activePenId !== null;
@@ -2639,6 +2660,19 @@
               state.currentMode = 'idle';
               touchCountText.textContent = '0本';
             }
+          }
+
+          // ホバー中にサイドボタンを先に押した場合は、ここでは描画を始めず
+          // ボタン状態を保持する。後続の接触moveから消しゴムを開始する。
+          if (
+            e.pointerType === 'pen' &&
+            e.pressure === 0 &&
+            (e.buttons & 1) === 0 &&
+            isStylusSideButtonPressed(e)
+          ) {
+            state.stylusButtonLatchUntil = eventTime + 1200;
+            modeStatusText.textContent = 'Sペン消しゴム待機中';
+            return;
           }
 
           if (state.holdTimer) { clearTimeout(state.holdTimer); state.holdTimer = null; }
@@ -2790,10 +2824,29 @@
           e.preventDefault();
           if (e.pointerType === 'touch' && state.rejectedTouchIds.has(e.pointerId)) return;
           if (e.pointerType === 'pen') state.lastStylusTime = performance.now();
+          updatePenTelemetry(e);
           const rect = inkCanvas.getBoundingClientRect();
           const screenX = e.clientX - rect.left;
           const screenY = e.clientY - rect.top;
           const { x, y } = toWorld(screenX, screenY);
+
+          // サイドボタンを先に押したSペンは、ペン先が触れてもpointerdownが
+          // 再発火しないことがある。接触を示すmoveから消しゴムを開始する。
+          const isPenContact = e.pressure > 0 || (e.buttons & 1) !== 0;
+          if (
+            e.pointerType === 'pen' &&
+            state.activePenId === null &&
+            isPenContact &&
+            isStylusSideButtonPressed(e) &&
+            (e.target === container || container.contains(e.target))
+          ) {
+            state.activePenId = e.pointerId;
+            state.currentMode = 'lasso_erase';
+            state.currentPenPoints = [{ x, y, pressure: e.pressure || 0.5, time: performance.now() }];
+            modeStatusText.textContent = 'Sペン消しゴム中';
+            renderOverlay();
+            return;
+          }
 
           // ペンを画面に触れた後でSペンのサイドボタンを押した場合も、
           // その地点から一時的ななげなわ消しゴムへ切り替える。
@@ -2898,7 +2951,12 @@
           }
 
           // --- 対象のポインターIDかどうかのチェック ---
-          if (state.activePenId !== e.pointerId) return;
+          if (state.activePenId !== e.pointerId) {
+            if (e.pointerType === 'pen' && e.buttons === 0) {
+              state.stylusButtonLatchUntil = -Infinity;
+            }
+            return;
+          }
 
           // 選択移動中
           if (state.currentMode === 'dragging_selection') {
@@ -3042,7 +3100,10 @@
           e.preventDefault();
 
           if (e.pointerType === 'touch' && state.rejectedTouchIds.delete(e.pointerId)) return;
-          if (e.pointerType === 'pen') state.lastStylusTime = performance.now();
+          if (e.pointerType === 'pen') {
+            state.lastStylusTime = performance.now();
+            updatePenTelemetry(e);
+          }
 
           if (e.pointerType === 'touch') {
             if (state.activeTouches.size >= 2) {
@@ -3179,6 +3240,7 @@
           }
 
           state.activePenId = null;
+          state.stylusButtonLatchUntil = -Infinity;
           state.currentPenPoints = [];
           state.currentMode = 'idle';
           redrawInkCanvas();
