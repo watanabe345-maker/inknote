@@ -224,10 +224,11 @@
       }
 
       #penSignalBadge {
-        position: absolute;
-        top: 68px;
-        right: 12px;
-        z-index: 21;
+        position: fixed;
+        top: max(72px, calc(env(safe-area-inset-top) + 62px));
+        left: 50%;
+        transform: translateX(-50%);
+        z-index: 1000;
         max-width: calc(100vw - 24px);
         padding: 7px 11px;
         border-radius: 10px;
@@ -893,7 +894,7 @@
         </div>
       </div>
 
-      <div id="penSignalBadge" role="status" aria-live="polite" hidden>Sペン信号</div>
+      <div id="penSignalBadge" role="status" aria-live="polite">入力診断 v4：待機中</div>
 
       <!-- 2本指シミュレーター（マウスや単一ポインタ環境でテスト用） -->
       <button id="twoFingerSimToggle" title="PCマウスで「2本指タップ＋囲み選択」や「スワイプ」をテスト">
@@ -1151,8 +1152,8 @@
         const IS_ANDROID = /Android/i.test(navigator.userAgent);
         const ANDROID_STYLUS_PROXIMITY_MS = 1800;
         const ANDROID_PALM_CONTACT_SIZE = 36;
-        const ANDROID_TOUCH_INTENT_DELAY_MS = 170;
-        const ANDROID_MIN_TWO_FINGER_SPREAD = 120;
+        const ANDROID_TOUCH_INTENT_DELAY_MS = 320;
+        const ANDROID_MIN_TWO_FINGER_SPREAD = 150;
         let saveTimer = null;
         let storageWarningShown = false;
         const deletedNotebookIds = new Set();
@@ -2649,12 +2650,15 @@
           const hasBroadContact = touches.some(touch =>
             Math.max(touch.width || 0, touch.height || 0) >= ANDROID_PALM_CONTACT_SIZE
           );
+          const maxContactSize = touches.reduce((max, touch) =>
+            Math.max(max, touch.width || 0, touch.height || 0), 0
+          );
           const looksLikePalmCluster = touches.length >= 2 &&
             (spread < ANDROID_MIN_TWO_FINGER_SPREAD || hasBroadContact);
 
           if (looksLikePalmCluster || touches.length > 2) {
             penSignalBadge.hidden = false;
-            penSignalBadge.textContent = `パーム除外 ${touches.length}点 / 間隔:${Math.round(spread)}`;
+            penSignalBadge.textContent = `パーム除外 ${touches.length}点 / 間隔:${Math.round(spread)} / 最大幅:${Math.round(maxContactSize)}`;
             penSignalBadge.style.background = 'rgba(21, 128, 61, .94)';
             rejectPendingAndroidTouches();
             return;
@@ -2667,6 +2671,9 @@
             touch.startScreenY = touch.screenY;
             state.currentMode = 'panning';
             modeStatusText.textContent = 'パン中';
+            penSignalBadge.hidden = false;
+            penSignalBadge.textContent = `指パン認識 幅:${Math.round(maxContactSize)}`;
+            penSignalBadge.style.background = 'rgba(30, 64, 175, .92)';
             renderOverlay();
             return;
           }
@@ -2684,6 +2691,9 @@
             };
             state.currentMode = 'zooming';
             modeStatusText.textContent = 'ズーム・パン中';
+            penSignalBadge.hidden = false;
+            penSignalBadge.textContent = `2本指認識 間隔:${Math.round(spread)} / 最大幅:${Math.round(maxContactSize)}`;
+            penSignalBadge.style.background = 'rgba(30, 64, 175, .92)';
             renderOverlay();
           }
         }
@@ -2865,7 +2875,7 @@
               state.androidTwoFingerIntentConfirmed = false;
             }
 
-            if (IS_ANDROID && state.selectedStrokeIds.size === 0) {
+            if (IS_ANDROID) {
               const width = Math.round(Number(e.width) || 0);
               const height = Math.round(Number(e.height) || 0);
               penSignalBadge.hidden = false;

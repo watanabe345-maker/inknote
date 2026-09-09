@@ -1,6 +1,6 @@
 'use strict';
 
-const CACHE_NAME = 'inknote-cache-v1';
+const CACHE_NAME = 'inknote-cache-v2';
 const CACHE_PREFIX = 'inknote-cache-';
 const APP_SHELL = [
   new URL('./', self.location.href).href,
