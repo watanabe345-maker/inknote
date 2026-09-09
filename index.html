@@ -2761,9 +2761,32 @@
         }, { passive: true });
 
         // Z Fold 6では通常のSペン長押しがcontextmenuとして通知される。
-        // 現在の描画を破棄し、その位置からなげなわ消しゴムへ切り替える。
+        // 図形として認識できる描画はQuickShapeを優先し、それ以外の場合だけ
+        // 現在の描画を破棄してなげなわ消しゴムへ切り替える。
         window.addEventListener('contextmenu', (e) => {
           if ((e.pointerType === 'pen' || e.button === 2) && state.activePenId !== null) {
+            if (state.currentMode === 'quick_shape_adjust') {
+              e.preventDefault();
+              return;
+            }
+
+            const hasRecognizableShape = state.currentMode === 'pen_draw' &&
+              state.currentPenPoints.length >= 15 &&
+              recognizeShape(state.currentPenPoints);
+            if (hasRecognizableShape) {
+              if (state.holdTimer) {
+                clearTimeout(state.holdTimer);
+                state.holdTimer = null;
+              }
+              triggerQuickShape();
+              e.preventDefault();
+              return;
+            }
+
+            if (state.currentMode !== 'pen_draw') {
+              e.preventDefault();
+              return;
+            }
             if (state.holdTimer) {
               clearTimeout(state.holdTimer);
               state.holdTimer = null;
