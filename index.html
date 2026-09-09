@@ -894,7 +894,7 @@
         </div>
       </div>
 
-      <div id="penSignalBadge" role="status" aria-live="polite">入力診断 v4：待機中</div>
+      <div id="penSignalBadge" role="status" aria-live="polite">入力診断 v5：端末判定中</div>
 
       <!-- 2本指シミュレーター（マウスや単一ポインタ環境でテスト用） -->
       <button id="twoFingerSimToggle" title="PCマウスで「2本指タップ＋囲み選択」や「スワイプ」をテスト">
@@ -1149,11 +1149,18 @@
         // タッチだけを除外し、通常のパン・ピンチ操作を妨げないようにする。
         const STYLUS_TOUCH_GRACE_MS = 90;
         const INTENTIONAL_TWO_FINGER_HOLD_MS = 90;
-        const IS_ANDROID = /Android/i.test(navigator.userAgent);
+        const PLATFORM_HINT = navigator.userAgentData?.platform || navigator.platform || '';
+        const IS_ANDROID = /Android/i.test(navigator.userAgent) || /Android/i.test(PLATFORM_HINT);
+        // Z FoldのPWAや「PC版サイト」ではAndroid表記が消え、Linuxとして
+        // 通知されることがある。複数タッチ対応のLinux系端末も対象にする。
+        const USE_STRICT_PALM_GUARD = IS_ANDROID || (
+          /Linux/i.test(`${navigator.userAgent} ${PLATFORM_HINT}`) && navigator.maxTouchPoints > 1
+        );
         const ANDROID_STYLUS_PROXIMITY_MS = 1800;
         const ANDROID_PALM_CONTACT_SIZE = 36;
         const ANDROID_TOUCH_INTENT_DELAY_MS = 320;
         const ANDROID_MIN_TWO_FINGER_SPREAD = 150;
+        penSignalBadge.textContent = `入力診断 v5：パーム保護 ${USE_STRICT_PALM_GUARD ? 'ON' : 'OFF'}`;
         let saveTimer = null;
         let storageWarningShown = false;
         const deletedNotebookIds = new Set();
@@ -2802,14 +2809,14 @@
             const stylusIsActive = state.activePenId !== null;
             const stylusWasJustUsed = eventTime - state.lastStylusTime < STYLUS_TOUCH_GRACE_MS;
             const contactSize = Math.max(Number(e.width) || 0, Number(e.height) || 0);
-            const androidStylusIsNear = IS_ANDROID && (
+            const androidStylusIsNear = USE_STRICT_PALM_GUARD && (
               state.stylusInProximity ||
               eventTime - state.lastStylusHoverTime < ANDROID_STYLUS_PROXIMITY_MS
             );
-            const isLikelyAndroidPalm = IS_ANDROID && contactSize >= ANDROID_PALM_CONTACT_SIZE;
+            const isLikelyAndroidPalm = USE_STRICT_PALM_GUARD && contactSize >= ANDROID_PALM_CONTACT_SIZE;
             if (stylusIsActive || stylusWasJustUsed || androidStylusIsNear || isLikelyAndroidPalm) {
               state.rejectedTouchIds.add(e.pointerId);
-              if (IS_ANDROID) {
+              if (USE_STRICT_PALM_GUARD) {
                 penSignalBadge.hidden = false;
                 penSignalBadge.textContent = `パーム除外 接触幅:${Math.round(contactSize)}`;
                 penSignalBadge.style.background = 'rgba(21, 128, 61, .94)';
@@ -2821,9 +2828,9 @@
             state.stylusInProximity = true;
             state.lastStylusHoverTime = eventTime;
             const trackedTouches = Array.from(state.activeTouches.values());
-            const androidTouchIntentWasPending = IS_ANDROID && state.androidTouchIntentTimer !== null;
+            const androidTouchIntentWasPending = USE_STRICT_PALM_GUARD && state.androidTouchIntentTimer !== null;
             const intentionalTwoFingerHold = trackedTouches.length === 2 &&
-              (!IS_ANDROID || (
+              (!USE_STRICT_PALM_GUARD || (
                 state.androidTwoFingerIntentConfirmed &&
                 !androidTouchIntentWasPending
               )) &&
@@ -2875,7 +2882,7 @@
               state.androidTwoFingerIntentConfirmed = false;
             }
 
-            if (IS_ANDROID) {
+            if (USE_STRICT_PALM_GUARD) {
               const width = Math.round(Number(e.width) || 0);
               const height = Math.round(Number(e.height) || 0);
               penSignalBadge.hidden = false;
@@ -3314,7 +3321,7 @@
           if (e.pointerType === 'touch') {
             if (
               state.activeTouches.size >= 2 &&
-              (!IS_ANDROID || state.androidTwoFingerIntentConfirmed)
+              (!USE_STRICT_PALM_GUARD || state.androidTwoFingerIntentConfirmed)
             ) {
               state.twoFingerCancelTime = performance.now();
             }
