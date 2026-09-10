@@ -1181,16 +1181,30 @@
         const CLIENT_ID = '306859405455-buptjo9g0qjm03h8vl95bdb7n52h6m6o.apps.googleusercontent.com';
         const API_KEY = 'AIzaSyB15C1QAqXLImwCVbVUQazEEl5oSiovWrg';
         const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.appdata';
-        const DRIVE_FILE_NAME = 'InkNote.backup.json';
+        const LEGACY_DRIVE_FILE_NAME = 'InkNote.backup.json';
+        const LEGACY_ARCHIVE_FILE_NAME = 'InkNote.backup.migrated.json';
+        const DRIVE_MANIFEST_FILE_NAME = 'InkNote.library.json';
+        const DRIVE_NOTEBOOK_FILE_PREFIX = 'InkNote.notebook.';
         let googleTokenClient = null;
         let googleAccessToken = null;
         let googleApisReady = false;
         let cloudSyncInFlight = null;
         let autoSyncTimer = null;
         let cloudBackupSize = null;
+        let cloudArchiveSize = 0;
 
         function serializedByteSize(value) {
           return new Blob([JSON.stringify(value)]).size;
+        }
+
+        function serializedFingerprint(value) {
+          const text = JSON.stringify(value);
+          let hash = 0x811c9dc5;
+          for (let index = 0; index < text.length; index += 1) {
+            hash ^= text.charCodeAt(index);
+            hash = Math.imul(hash, 0x01000193);
+          }
+          return (hash >>> 0).toString(16).padStart(8, '0');
         }
 
         function formatStorageSize(bytes) {
@@ -1202,11 +1216,13 @@
           return `${(size / (1024 * 1024 * 1024)).toFixed(2)} GB`;
         }
 
-        function updateCloudStorageSummary(bytes = cloudBackupSize) {
+        function updateCloudStorageSummary(bytes = cloudBackupSize, archiveBytes = cloudArchiveSize) {
           if (bytes !== null && bytes !== undefined) cloudBackupSize = Number(bytes);
+          cloudArchiveSize = Number(archiveBytes) || 0;
           if (Number.isFinite(cloudBackupSize)) {
-            cloudStorageSummary.textContent = `クラウド容量：${formatStorageSize(cloudBackupSize)}`;
-            cloudStorageSummary.title = `InkNote.backup.json：${cloudBackupSize.toLocaleString()} バイト`;
+            const archiveLabel = cloudArchiveSize > 0 ? `（退避 ${formatStorageSize(cloudArchiveSize)}）` : '';
+            cloudStorageSummary.textContent = `クラウド容量：${formatStorageSize(cloudBackupSize)}${archiveLabel}`;
+            cloudStorageSummary.title = `InkNoteクラウドファイル合計：${cloudBackupSize.toLocaleString()} バイト`;
           } else {
             cloudStorageSummary.textContent = 'クラウド容量：同期後に表示';
             cloudStorageSummary.removeAttribute('title');
@@ -1293,6 +1309,8 @@
 
         function makeCloudNotebookPayload(notebook) {
           return {
+            schemaVersion: 2,
+            kind: 'notebook',
             id: notebook.id,
             title: notebook.title,
             coverColor: notebook.coverColor,
@@ -1306,15 +1324,37 @@
           };
         }
 
-        function makeCloudPayload() {
+        function getNotebookCloudUpdatedAt(notebook) {
+          return Math.max(
+            Number(notebook.updatedAt) || 0,
+            ...notebook.pages.map(page => Number(page.updatedAt) || 0)
+          );
+        }
+
+        function getNotebookCloudFileName(notebookId) {
+          return `${DRIVE_NOTEBOOK_FILE_PREFIX}${notebookId}.json`;
+        }
+
+        function makeCloudManifest(notebookFiles) {
           return {
-            schemaVersion: 1,
+            schemaVersion: 2,
+            kind: 'library',
             exportedAt: new Date().toISOString(),
             currentNotebookId: state.currentNotebookId,
             currentPageId: state.currentPageId,
             deletedNotebookIds: Array.from(deletedNotebookIds),
             deletedPageIds: Array.from(deletedPageIds),
-            notebooks: state.notebooks.map(makeCloudNotebookPayload)
+            notebooks: state.notebooks.map(notebook => {
+              const file = notebookFiles.get(notebook.id) || {};
+              return {
+                id: notebook.id,
+                fileId: file.id || file.fileId || null,
+                fileName: getNotebookCloudFileName(notebook.id),
+                updatedAt: getNotebookCloudUpdatedAt(notebook),
+                contentHash: serializedFingerprint(makeCloudNotebookPayload(notebook)),
+                size: Number(file.size) || serializedByteSize(makeCloudNotebookPayload(notebook))
+              };
+            })
           };
         }
 
@@ -1333,6 +1373,70 @@
               updatedAt: Number(page.updatedAt) || 0
             }))
           };
+        }
+
+        function mergeCloudNotebookIntoState(remoteValue) {
+          const remoteNotebook = normalizeCloudNotebook(remoteValue);
+          if (deletedNotebookIds.has(remoteNotebook.id)) return null;
+          remoteNotebook.pages = remoteNotebook.pages.filter(page => !deletedPageIds.has(page.id));
+          const localIndex = state.notebooks.findIndex(notebook => notebook.id === remoteNotebook.id);
+          if (localIndex < 0) {
+            if (!remoteNotebook.pages.length) remoteNotebook.pages.push(makePage());
+            state.notebooks.push(remoteNotebook);
+            return remoteNotebook;
+          }
+
+          const localNotebook = state.notebooks[localIndex];
+          const mergedPages = new Map(
+            localNotebook.pages
+              .filter(page => !deletedPageIds.has(page.id))
+              .map(page => [page.id, page])
+          );
+          remoteNotebook.pages.forEach(remotePage => {
+            const localPage = mergedPages.get(remotePage.id);
+            if (!localPage) {
+              mergedPages.set(remotePage.id, remotePage);
+              return;
+            }
+            const localUpdatedAt = Number(localPage.updatedAt) || 0;
+            const remoteUpdatedAt = Number(remotePage.updatedAt) || 0;
+            if (remoteUpdatedAt > localUpdatedAt ||
+                (remoteUpdatedAt === localUpdatedAt && remotePage.strokes.length > localPage.strokes.length)) {
+              mergedPages.set(remotePage.id, remotePage);
+            }
+          });
+          const useRemoteMetadata =
+            (Number(remoteNotebook.updatedAt) || 0) > (Number(localNotebook.updatedAt) || 0);
+          const notebookMetadata = useRemoteMetadata ? remoteNotebook : localNotebook;
+          const pages = Array.from(mergedPages.values());
+          if (!pages.length) pages.push(makePage());
+          const mergedNotebook = { ...notebookMetadata, pages };
+          state.notebooks[localIndex] = mergedNotebook;
+          return mergedNotebook;
+        }
+
+        function ensureValidLibrarySelection(preferredNotebookId, preferredPageId) {
+          state.notebooks = state.notebooks.filter(notebook => !deletedNotebookIds.has(notebook.id));
+          state.notebooks.forEach(notebook => {
+            notebook.pages = notebook.pages.filter(page => !deletedPageIds.has(page.id));
+            if (!notebook.pages.length) notebook.pages.push(makePage());
+          });
+          if (!state.notebooks.length) {
+            const page = makePage();
+            state.notebooks.push({
+              id: makeId('notebook'),
+              title: 'マイノート',
+              coverColor: COVER_COLORS[0],
+              updatedAt: Date.now(),
+              pages: [page]
+            });
+          }
+          const preferredNotebook = state.notebooks.find(notebook => notebook.id === preferredNotebookId);
+          state.currentNotebookId = preferredNotebook?.id || state.notebooks[0].id;
+          const notebook = state.currentNotebook;
+          const preferredPage = notebook.pages.find(page => page.id === preferredPageId);
+          state.currentPageId = preferredPage?.id || notebook.pages[0].id;
+          state.activePageIndex = Math.max(0, notebook.pages.findIndex(page => page.id === state.currentPageId));
         }
 
         function mergeCloudLibrary(remote) {
@@ -1382,18 +1486,11 @@
             });
           });
           state.notebooks = Array.from(mergedNotebooks.values());
-          const localNotebookStillExists = state.notebooks.some(n => n.id === localNotebookId);
-          const remoteNotebookStillExists = state.notebooks.some(n => n.id === remote.currentNotebookId);
-          state.currentNotebookId = localNotebookStillExists
-            ? localNotebookId
-            : (remoteNotebookStillExists ? remote.currentNotebookId : state.notebooks[0].id);
-          const notebook = state.currentNotebook;
-          const localPageStillExists = notebook.pages.some(p => p.id === localPageId);
-          const remotePageExistsHere = notebook.pages.some(p => p.id === remote.currentPageId);
-          state.currentPageId = localPageStillExists
-            ? localPageId
-            : (remotePageExistsHere ? remote.currentPageId : notebook.pages[0].id);
-          state.activePageIndex = Math.max(0, notebook.pages.findIndex(p => p.id === state.currentPageId));
+          const preferredNotebookId = state.notebooks.some(n => n.id === localNotebookId)
+            ? localNotebookId : remote.currentNotebookId;
+          const preferredPageId = preferredNotebookId === localNotebookId
+            ? localPageId : remote.currentPageId;
+          ensureValidLibrarySelection(preferredNotebookId, preferredPageId);
           saveLibraryNow();
           renderHome();
         }
@@ -1415,38 +1512,54 @@
           return response;
         }
 
-        async function findCloudBackup() {
+        async function listInkNoteCloudFiles() {
           const params = new URLSearchParams({
             spaces: 'appDataFolder',
-            q: `name = '${DRIVE_FILE_NAME}' and trashed = false`,
+            q: 'trashed = false',
             orderBy: 'modifiedTime desc',
-            pageSize: '1',
+            pageSize: '1000',
             fields: 'files(id,name,modifiedTime,size,quotaBytesUsed)',
             key: API_KEY
           });
           const response = await driveFetch(`https://www.googleapis.com/drive/v3/files?${params}`);
           const data = await response.json();
-          return data.files?.[0] || null;
+          return (data.files || []).filter(file =>
+            file.name === DRIVE_MANIFEST_FILE_NAME ||
+            file.name === LEGACY_DRIVE_FILE_NAME ||
+            file.name === LEGACY_ARCHIVE_FILE_NAME ||
+            file.name.startsWith(DRIVE_NOTEBOOK_FILE_PREFIX)
+          );
         }
 
-        async function downloadCloudBackup(fileId) {
+        function newestCloudFileNamed(files, name) {
+          return files
+            .filter(file => file.name === name)
+            .sort((a, b) => String(b.modifiedTime).localeCompare(String(a.modifiedTime)))[0] || null;
+        }
+
+        function getCloudFilesTotalSize(files) {
+          return files.reduce((total, file) =>
+            total + (Number(file.quotaBytesUsed ?? file.size) || 0), 0);
+        }
+
+        async function downloadCloudJson(fileId) {
           const response = await driveFetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media&key=${encodeURIComponent(API_KEY)}`);
           return response.json();
         }
 
-        async function createCloudBackupFile() {
+        async function createCloudJsonFile(name) {
           const response = await driveFetch(`https://www.googleapis.com/drive/v3/files?fields=id&key=${encodeURIComponent(API_KEY)}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name: DRIVE_FILE_NAME, parents: ['appDataFolder'], mimeType: 'application/json' })
+            body: JSON.stringify({ name, parents: ['appDataFolder'], mimeType: 'application/json' })
           });
           return (await response.json()).id;
         }
 
-        async function uploadCloudBackup(fileId, payload) {
+        async function uploadCloudJson(fileId, payload) {
           const params = new URLSearchParams({
             uploadType: 'media',
-            fields: 'id,size,quotaBytesUsed,modifiedTime',
+            fields: 'id,name,size,quotaBytesUsed,modifiedTime',
             key: API_KEY
           });
           const response = await driveFetch(`https://www.googleapis.com/upload/drive/v3/files/${encodeURIComponent(fileId)}?${params}`, {
@@ -1455,6 +1568,20 @@
             body: JSON.stringify(payload)
           });
           return response.json();
+        }
+
+        async function deleteCloudFile(fileId) {
+          await driveFetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?key=${encodeURIComponent(API_KEY)}`, {
+            method: 'DELETE'
+          });
+        }
+
+        async function renameCloudFile(fileId, name) {
+          await driveFetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?fields=id,name&key=${encodeURIComponent(API_KEY)}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name })
+          });
         }
 
         function runGoogleDriveSync(silent = false) {
@@ -1478,17 +1605,117 @@
         async function syncWithGoogleDrive({ silent = false } = {}) {
           if (!silent) setCloudButtonState('☁️ クラウドを確認中…', true);
           captureCurrentPageThumbnail();
-          let remoteFile = await findCloudBackup();
-          if (remoteFile) {
-            updateCloudStorageSummary(remoteFile.size ?? remoteFile.quotaBytesUsed);
-            const remoteLibrary = await downloadCloudBackup(remoteFile.id);
-            mergeCloudLibrary(remoteLibrary);
-          } else {
-            remoteFile = { id: await createCloudBackupFile() };
+          const localNotebookId = state.currentNotebookId;
+          const localPageId = state.currentPageId;
+          let cloudFiles = await listInkNoteCloudFiles();
+          let manifestFile = newestCloudFileNamed(cloudFiles, DRIVE_MANIFEST_FILE_NAME);
+          const legacyFile = newestCloudFileNamed(cloudFiles, LEGACY_DRIVE_FILE_NAME);
+          let remoteManifest = null;
+          const notebooksNeedingUpload = new Set();
+
+          if (manifestFile) {
+            remoteManifest = await downloadCloudJson(manifestFile.id);
+            if (remoteManifest?.schemaVersion !== 2 || !Array.isArray(remoteManifest.notebooks)) {
+              throw new Error('クラウド索引の形式が正しくありません');
+            }
+            (remoteManifest.deletedNotebookIds || []).forEach(id => deletedNotebookIds.add(id));
+            (remoteManifest.deletedPageIds || []).forEach(id => deletedPageIds.add(id));
           }
-          const uploadedFile = await uploadCloudBackup(remoteFile.id, makeCloudPayload());
-          updateCloudStorageSummary(uploadedFile.size ?? uploadedFile.quotaBytesUsed);
+
+          // 旧アプリが新しい単一バックアップを書いた場合も、一度だけ安全に取り込む。
+          const legacyIsNewer = legacyFile && (!manifestFile ||
+            Date.parse(legacyFile.modifiedTime || 0) > Date.parse(manifestFile.modifiedTime || 0));
+          if (legacyIsNewer) {
+            mergeCloudLibrary(await downloadCloudJson(legacyFile.id));
+            state.notebooks.forEach(notebook => notebooksNeedingUpload.add(notebook.id));
+          }
+
+          const manifestEntries = new Map(
+            (remoteManifest?.notebooks || []).map(entry => [entry.id, entry])
+          );
+          const cloudFilesById = new Map(cloudFiles.map(file => [file.id, file]));
+          const cloudFilesByName = new Map();
+          cloudFiles.forEach(file => {
+            if (!cloudFilesByName.has(file.name)) cloudFilesByName.set(file.name, file);
+          });
+
+          // 索引の更新時刻が異なるノートだけ取得し、ページ単位で競合を統合する。
+          for (const entry of manifestEntries.values()) {
+            if (!entry?.id || deletedNotebookIds.has(entry.id)) continue;
+            const localNotebook = state.notebooks.find(notebook => notebook.id === entry.id);
+            const localUpdatedAt = localNotebook ? getNotebookCloudUpdatedAt(localNotebook) : -1;
+            const localContentHash = localNotebook
+              ? serializedFingerprint(makeCloudNotebookPayload(localNotebook)) : null;
+            const remoteUpdatedAt = Number(entry.updatedAt) || 0;
+            if (localNotebook && localUpdatedAt === remoteUpdatedAt &&
+                localContentHash === entry.contentHash && !notebooksNeedingUpload.has(entry.id)) continue;
+            const remoteFile = cloudFilesById.get(entry.fileId) ||
+              cloudFilesByName.get(entry.fileName || getNotebookCloudFileName(entry.id));
+            if (!remoteFile) {
+              if (localNotebook) notebooksNeedingUpload.add(entry.id);
+              continue;
+            }
+            const remoteNotebook = await downloadCloudJson(remoteFile.id);
+            if (remoteNotebook?.id !== entry.id) throw new Error('クラウドのノートIDが一致しません');
+            mergeCloudNotebookIntoState(remoteNotebook);
+            // ローカルとリモートの差分を統合したため、このノートだけ書き戻す。
+            notebooksNeedingUpload.add(entry.id);
+          }
+
+          const preferredNotebookId = state.notebooks.some(notebook => notebook.id === localNotebookId)
+            ? localNotebookId : remoteManifest?.currentNotebookId;
+          const preferredPageId = preferredNotebookId === localNotebookId
+            ? localPageId : remoteManifest?.currentPageId;
+          ensureValidLibrarySelection(preferredNotebookId, preferredPageId);
+
+          const notebookFiles = new Map();
+          for (const notebook of state.notebooks) {
+            if (deletedNotebookIds.has(notebook.id)) continue;
+            const entry = manifestEntries.get(notebook.id);
+            const fileName = getNotebookCloudFileName(notebook.id);
+            let notebookFile = cloudFilesById.get(entry?.fileId) || cloudFilesByName.get(fileName);
+            const localUpdatedAt = getNotebookCloudUpdatedAt(notebook);
+            const localContentHash = serializedFingerprint(makeCloudNotebookPayload(notebook));
+            const needsUpload = !remoteManifest || !entry || !notebookFile ||
+              localUpdatedAt !== (Number(entry.updatedAt) || 0) ||
+              localContentHash !== entry.contentHash ||
+              notebooksNeedingUpload.has(notebook.id);
+            if (needsUpload) {
+              const fileId = notebookFile?.id || await createCloudJsonFile(fileName);
+              const uploaded = await uploadCloudJson(fileId, makeCloudNotebookPayload(notebook));
+              notebookFile = { ...notebookFile, ...uploaded, id: fileId, name: fileName };
+            }
+            notebookFiles.set(notebook.id, {
+              ...notebookFile,
+              id: notebookFile.id,
+              size: Number(notebookFile.size) || serializedByteSize(makeCloudNotebookPayload(notebook))
+            });
+          }
+
+          // 削除済みノートの本体ファイルは、索引の墓石情報を残した上で除去する。
+          for (const notebookId of deletedNotebookIds) {
+            const entry = manifestEntries.get(notebookId);
+            const file = cloudFilesById.get(entry?.fileId) ||
+              cloudFilesByName.get(entry?.fileName || getNotebookCloudFileName(notebookId));
+            if (file) await deleteCloudFile(file.id);
+          }
+
+          const manifestPayload = makeCloudManifest(notebookFiles);
+          if (!manifestFile) {
+            manifestFile = { id: await createCloudJsonFile(DRIVE_MANIFEST_FILE_NAME) };
+          }
+          await uploadCloudJson(manifestFile.id, manifestPayload);
+
+          // appDataFolderはゴミ箱非対応のため、移行成功後の旧データは通信対象外の名前で安全に退避する。
+          if (legacyFile) await renameCloudFile(legacyFile.id, LEGACY_ARCHIVE_FILE_NAME);
+
+          cloudFiles = await listInkNoteCloudFiles();
+          const archivedBytes = getCloudFilesTotalSize(
+            cloudFiles.filter(file => file.name === LEGACY_ARCHIVE_FILE_NAME)
+          );
+          updateCloudStorageSummary(getCloudFilesTotalSize(cloudFiles), archivedBytes);
           saveLibraryNow();
+          renderHome();
           if (!silent) {
             setCloudButtonState('✓ 同期完了');
             setTimeout(() => setCloudButtonState('☁️ Google Drive同期'), 2200);
@@ -1941,6 +2168,7 @@
           openConfirmDialog('ページを削除', `${pageIndex + 1}ページ目を削除します。\nこの操作は取り消せません。`, () => {
             deletedPageIds.add(page.id);
             notebook.pages.splice(pageIndex, 1);
+            notebook.updatedAt = Date.now();
             state.activePageIndex = Math.min(pageIndex, notebook.pages.length - 1);
             state.currentPageId = notebook.pages[state.activePageIndex].id;
             saveLibraryNow();
