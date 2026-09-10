@@ -506,6 +506,11 @@
       .phase2-btn:active { transform: scale(.96); background: rgba(255,255,255,.2); }
       .phase2-btn:disabled { opacity:.5; cursor:wait; }
       .library-actions { display:flex; align-items:center; gap:9px; flex-wrap:wrap; justify-content:flex-end; }
+      .cloud-sync-control { display:flex; flex-direction:column; align-items:flex-end; gap:4px; }
+      #cloudStorageSummary {
+        min-height:14px; padding-right:8px; color:#a8b4bf;
+        font:600 11px/1.2 system-ui; white-space:nowrap;
+      }
       #cloudSyncBtn.syncing { opacity:.72; cursor:progress; }
       #notebookGrid {
         height: calc(100% - max(86px, calc(68px + env(safe-area-inset-top))));
@@ -551,6 +556,7 @@
       }
       .notebook-name { font-size: 16px; font-weight: 700; margin-top: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
       .notebook-meta { color:#9facb8; font-size:12px; margin-top:4px; }
+      .notebook-size { color:#c4ced7; }
       #emptyLibrary { grid-column:1/-1; color:#a8b4bf; text-align:center; padding:14vh 20px; }
 
       .notebook-header { position:absolute; inset:0 0 auto; }
@@ -707,7 +713,10 @@
       <header class="library-header">
         <div><div class="library-title">InkNote</div><div class="library-subtitle">あなたのノートライブラリ</div></div>
         <div class="library-actions">
-          <button id="cloudSyncBtn" class="phase2-btn" type="button" disabled title="Google Drive と同期">☁️ 同期準備中…</button>
+          <div class="cloud-sync-control">
+            <button id="cloudSyncBtn" class="phase2-btn" type="button" disabled title="Google Drive と同期">☁️ 同期準備中…</button>
+            <span id="cloudStorageSummary" aria-live="polite">クラウド容量：同期後に表示</span>
+          </div>
           <button id="createNotebookBtn" class="phase2-btn" type="button">＋ 新規ノート</button>
         </div>
       </header>
@@ -1125,6 +1134,7 @@
         const nextEditingPageBtn = document.getElementById('nextEditingPageBtn');
         const editingPageLabel = document.getElementById('editingPageLabel');
         const cloudSyncBtn = document.getElementById('cloudSyncBtn');
+        const cloudStorageSummary = document.getElementById('cloudStorageSummary');
         const newNotebookModal = document.getElementById('newNotebookModal');
         const newNotebookForm = document.getElementById('newNotebookForm');
         const newNotebookTitle = document.getElementById('newNotebookTitle');
@@ -1177,6 +1187,31 @@
         let googleApisReady = false;
         let cloudSyncInFlight = null;
         let autoSyncTimer = null;
+        let cloudBackupSize = null;
+
+        function serializedByteSize(value) {
+          return new Blob([JSON.stringify(value)]).size;
+        }
+
+        function formatStorageSize(bytes) {
+          const size = Number(bytes);
+          if (!Number.isFinite(size) || size < 0) return '—';
+          if (size < 1024) return `${size} B`;
+          if (size < 1024 * 1024) return `${(size / 1024).toFixed(size < 10 * 1024 ? 1 : 0)} KB`;
+          if (size < 1024 * 1024 * 1024) return `${(size / (1024 * 1024)).toFixed(size < 10 * 1024 * 1024 ? 2 : 1)} MB`;
+          return `${(size / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+        }
+
+        function updateCloudStorageSummary(bytes = cloudBackupSize) {
+          if (bytes !== null && bytes !== undefined) cloudBackupSize = Number(bytes);
+          if (Number.isFinite(cloudBackupSize)) {
+            cloudStorageSummary.textContent = `クラウド容量：${formatStorageSize(cloudBackupSize)}`;
+            cloudStorageSummary.title = `InkNote.backup.json：${cloudBackupSize.toLocaleString()} バイト`;
+          } else {
+            cloudStorageSummary.textContent = 'クラウド容量：同期後に表示';
+            cloudStorageSummary.removeAttribute('title');
+          }
+        }
 
         function setCloudButtonState(label, busy = false) {
           cloudSyncBtn.textContent = label;
@@ -1256,6 +1291,21 @@
           });
         }
 
+        function makeCloudNotebookPayload(notebook) {
+          return {
+            id: notebook.id,
+            title: notebook.title,
+            coverColor: notebook.coverColor,
+            updatedAt: Number(notebook.updatedAt) || 0,
+            pages: notebook.pages.map(page => ({
+              id: page.id,
+              strokes: page.strokes,
+              thumbnail: page.thumbnail,
+              updatedAt: Number(page.updatedAt) || 0
+            }))
+          };
+        }
+
         function makeCloudPayload() {
           return {
             schemaVersion: 1,
@@ -1264,18 +1314,7 @@
             currentPageId: state.currentPageId,
             deletedNotebookIds: Array.from(deletedNotebookIds),
             deletedPageIds: Array.from(deletedPageIds),
-            notebooks: state.notebooks.map(notebook => ({
-              id: notebook.id,
-              title: notebook.title,
-              coverColor: notebook.coverColor,
-              updatedAt: Number(notebook.updatedAt) || 0,
-              pages: notebook.pages.map(page => ({
-                id: page.id,
-                strokes: page.strokes,
-                thumbnail: page.thumbnail,
-                updatedAt: Number(page.updatedAt) || 0
-              }))
-            }))
+            notebooks: state.notebooks.map(makeCloudNotebookPayload)
           };
         }
 
@@ -1382,7 +1421,7 @@
             q: `name = '${DRIVE_FILE_NAME}' and trashed = false`,
             orderBy: 'modifiedTime desc',
             pageSize: '1',
-            fields: 'files(id,name,modifiedTime)',
+            fields: 'files(id,name,modifiedTime,size,quotaBytesUsed)',
             key: API_KEY
           });
           const response = await driveFetch(`https://www.googleapis.com/drive/v3/files?${params}`);
@@ -1405,11 +1444,17 @@
         }
 
         async function uploadCloudBackup(fileId, payload) {
-          await driveFetch(`https://www.googleapis.com/upload/drive/v3/files/${encodeURIComponent(fileId)}?uploadType=media&key=${encodeURIComponent(API_KEY)}`, {
+          const params = new URLSearchParams({
+            uploadType: 'media',
+            fields: 'id,size,quotaBytesUsed,modifiedTime',
+            key: API_KEY
+          });
+          const response = await driveFetch(`https://www.googleapis.com/upload/drive/v3/files/${encodeURIComponent(fileId)}?${params}`, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json; charset=UTF-8' },
             body: JSON.stringify(payload)
           });
+          return response.json();
         }
 
         function runGoogleDriveSync(silent = false) {
@@ -1435,12 +1480,14 @@
           captureCurrentPageThumbnail();
           let remoteFile = await findCloudBackup();
           if (remoteFile) {
+            updateCloudStorageSummary(remoteFile.size ?? remoteFile.quotaBytesUsed);
             const remoteLibrary = await downloadCloudBackup(remoteFile.id);
             mergeCloudLibrary(remoteLibrary);
           } else {
             remoteFile = { id: await createCloudBackupFile() };
           }
-          await uploadCloudBackup(remoteFile.id, makeCloudPayload());
+          const uploadedFile = await uploadCloudBackup(remoteFile.id, makeCloudPayload());
+          updateCloudStorageSummary(uploadedFile.size ?? uploadedFile.quotaBytesUsed);
           saveLibraryNow();
           if (!silent) {
             setCloudButtonState('✓ 同期完了');
@@ -1712,7 +1759,13 @@
             name.textContent = notebook.title;
             const meta = document.createElement('div');
             meta.className = 'notebook-meta';
-            meta.textContent = `${notebook.pages.length} ページ`;
+            const notebookBytes = serializedByteSize(makeCloudNotebookPayload(notebook));
+            meta.append(`${notebook.pages.length} ページ · `);
+            const size = document.createElement('span');
+            size.className = 'notebook-size';
+            size.textContent = formatStorageSize(notebookBytes);
+            size.title = `クラウドバックアップ内の推定サイズ：${notebookBytes.toLocaleString()} バイト`;
+            meta.appendChild(size);
             tile.append(cover, name, meta);
             tile.addEventListener('click', () => openNotebook(notebook.id));
             const editButton = document.createElement('button');
