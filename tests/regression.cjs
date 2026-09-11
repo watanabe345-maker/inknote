@@ -13,7 +13,7 @@ function source(name) {
 }
 const functions = ['serializedByteSize', 'serializedFingerprint', 'makeCloudNotebookPayload',
   'getNotebookCloudUpdatedAt', 'getNotebookCloudFileName', 'makeCloudManifest',
-  'normalizeCloudNotebook', 'validateCloudNotebook', 'readDeletedIds', 'mergeCloudNotebookIntoState',
+  'normalizeCloudNotebook', 'normalizeStoredStroke', 'calculateBBox', 'validateCloudNotebook', 'readDeletedIds', 'mergeCloudNotebookIntoState',
   'ensureValidLibrarySelection', 'mergeCloudLibrary', 'driveFetch', 'listInkNoteCloudFiles',
   'newestCloudFileNamed', 'getCloudFilesTotalSize', 'downloadCloudJson', 'createCloudJsonFile',
   'uploadCloudJson', 'deleteCloudFile', 'renameCloudFile', 'runGoogleDriveSync',
@@ -43,7 +43,7 @@ function fixture(books = [book()]) {
     DRIVE_MANIFEST_FILE_NAME: 'InkNote.library.json', DRIVE_NOTEBOOK_FILE_PREFIX: 'InkNote.notebook.',
     API_KEY: 'mock', googleAccessToken: 'mock', cloudSyncInFlight: null, syncRequestedAgain: false, libraryLoadFailed: false,
     COVER_COLORS: ['#315f72'], makeId: () => `new-${++sequence}`, makePage: () => book(`new-${++sequence}`).pages[0],
-    setCloudButtonState() {}, captureCurrentPageThumbnail() {}, saveLibraryNow() {}, renderHome() {},
+    document:{getElementById(){return null;}}, showSyncError(){}, setCloudButtonState() {}, captureCurrentPageThumbnail() {}, saveLibraryNow() {}, renderHome() {},
     renderNotebook() {}, updateCloudStorageSummary() {}, scheduleAuthorizedAutoSync() {},
     fetch: async (url, options = {}) => {
       const u = new URL(url), method = options.method || 'GET';
@@ -126,10 +126,15 @@ test('missing referenced notebook aborts without overwriting index', async () =>
   const f = fixture([book('a'), book('b')]); f.seed(); f.context.state.notebooks.pop(); f.records.delete('note-b');
   await assert.rejects(f.sync(), /本体/); assert.equal(f.uploads().length, 0);
 });
-test('invalid stroke is rejected before replacing local notebook', async () => {
+test('legacy invalid stroke no longer blocks sync and original data is retained', async () => {
   const f = fixture(); f.seed(); const remote = f.records.get('note-a'); remote.version = '2';
   remote.content.pages[0].strokes = [{ points: [{ x: null, y: 5 }] }];
-  await assert.rejects(f.sync(), /描画データ/); assert.equal(f.context.state.notebooks[0].pages[0].strokes.length, 0);
+  remote.content.pages[0].updatedAt = 20;
+  await f.sync();
+  const restored=f.context.state.notebooks[0].pages[0].strokes[0];
+  assert.equal(restored.points.length, 0);
+  assert.equal(restored.recoveryOriginalStroke.points[0].x, null);
+  assert.equal(f.records.get('note-a').content.pages[0].strokes[0].recoveryOriginalStroke.points[0].x, null);
 });
 test('failed manifest save never deletes notebook body', async () => {
   const f = fixture([book('a'), book('b')]); f.seed(); f.context.deletedNotebookIds.add('b');
@@ -231,4 +236,23 @@ test('sync waits for editor to close before merging', async () => {
   f.context.state.viewMode='notebook';
   f.context.document.dispatchEvent(new Event('inknote:library-ready'));
   await waiting; assert.equal(completed,true);
+});
+test('local legacy invalid coordinates do not hide healthy notebooks', () => {
+  const f=fixture();
+  const a=book('old');
+  a.pages[0].strokes=[{id:'broken',points:[{x:null,y:null}]},{id:'good',points:[{x:1,y:2},{x:3,y:4}]}];
+  Object.assign(f.context,{STORAGE_KEY:'test',localStorage:{getItem:()=>JSON.stringify({notebooks:[a,book('healthy')],currentNotebookId:'old',currentPageId:'old-page'})}});
+  vm.runInContext(source('loadLibrary'), f.context);
+  f.context.loadLibrary();
+  assert.equal(f.context.libraryLoadFailed,false);
+  assert.equal(f.context.state.notebooks.length,2);
+  assert.equal(f.context.state.notebooks[0].pages[0].strokes[1].points.length,2);
+  assert.equal(f.context.state.notebooks[0].pages[0].strokes[0].recoveryOriginalStroke.points[0].x,null);
+});
+test('repeated normalization does not grow recovery records', () => {
+  const f=fixture();
+  for(const stroke of [null,{points:[]},{points:[{x:null,y:5}]}]) {
+    const first=f.context.normalizeStoredStroke(stroke);
+    assert.equal(JSON.stringify(f.context.normalizeStoredStroke(first)),JSON.stringify(first));
+  }
 });

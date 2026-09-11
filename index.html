@@ -907,7 +907,7 @@
         </div>
       </div>
 
-      <div id="penSignalBadge" role="status" aria-live="polite">入力診断 v10：端末判定中</div>
+      <div id="penSignalBadge" role="status" aria-live="polite">入力診断 v11：端末判定中</div>
 
       <!-- 2本指シミュレーター（マウスや単一ポインタ環境でテスト用） -->
       <button id="twoFingerSimToggle" title="PCマウスで「2本指タップ＋囲み選択」や「スワイプ」をテスト">
@@ -1168,7 +1168,7 @@
         const ANDROID_PALM_CONTACT_SIZE = 36;
         const ANDROID_TOUCH_INTENT_DELAY_MS = 160;
         const ANDROID_MIN_TWO_FINGER_SPREAD = 150;
-        penSignalBadge.textContent = `入力診断 v10：パーム保護 ${USE_STRICT_PALM_GUARD ? 'ON' : 'OFF'}`;
+        penSignalBadge.textContent = `入力診断 v11：パーム保護 ${USE_STRICT_PALM_GUARD ? 'ON' : 'OFF'}`;
         let saveTimer = null;
         let storageWarningShown = false;
         let libraryLoadFailed = false;
@@ -1277,6 +1277,7 @@
             cloudSyncBtn.disabled = true;
             cloudSyncBtn.textContent = '☁️ 同期を利用できません';
             cloudSyncBtn.title = error.message;
+            showSyncError(error);
           }
         }
 
@@ -1304,6 +1305,7 @@
             setCloudButtonState('☁️ 同期に失敗しました');
             cloudSyncBtn.title = error.message;
             showToast(error.message, '⚠️');
+            showSyncError(error);
             setTimeout(() => setCloudButtonState('☁️ Google Drive同期'), 2600);
           });
         }
@@ -1367,13 +1369,60 @@
             updatedAt: Number(notebook.updatedAt) || 0,
             pages: (Array.isArray(notebook.pages) && notebook.pages.length ? notebook.pages : [makePage()]).map(page => ({
               id: page.id || makeId('page'),
-              strokes: Array.isArray(page.strokes) ? page.strokes : [],
+              strokes: Array.isArray(page.strokes) ? page.strokes.map(normalizeStoredStroke) : [],
               undoStack: [],
               redoStack: [],
               thumbnail: typeof page.thumbnail === 'string' ? page.thumbnail : null,
               updatedAt: Number(page.updatedAt) || 0
             }))
           };
+        }
+
+        function normalizeStoredStroke(stroke) {
+          const points = Array.isArray(stroke?.points) ? stroke.points : [];
+          const validPoints = points.filter(point => point && Number.isFinite(point.x) && Number.isFinite(point.y));
+          if (stroke && points.length > 0 && validPoints.length === points.length) return stroke;
+          // 過去の図形補正が保存したnull座標を描画から除外するが、元データ自体は保持する。
+          const bbox = validPoints.length ? calculateBBox(validPoints) : { minX: 0, minY: 0, maxX: 0, maxY: 0 };
+          return {
+            ...stroke,
+            points: validPoints,
+            bbox,
+            recoveryOriginalStroke: stroke && Object.prototype.hasOwnProperty.call(stroke, 'recoveryOriginalStroke')
+              ? stroke.recoveryOriginalStroke : (stroke ?? null)
+          };
+        }
+
+        function showSyncError(error) {
+          let panel = document.getElementById('syncErrorPanel');
+          if (!panel) {
+            panel = document.createElement('aside');
+            panel.id = 'syncErrorPanel';
+            panel.setAttribute('role', 'alert');
+            panel.style.cssText = 'position:absolute;bottom:20px;left:16px;right:16px;z-index:8;padding:16px;border-radius:14px;background:#fff3db;color:#563a13;max-height:35vh;overflow:auto;touch-action:pan-y;white-space:pre-wrap;user-select:text;';
+            const message = document.createElement('div');
+            message.id = 'syncErrorDetail';
+            panel.appendChild(message);
+            const exportButton = document.createElement('button');
+            exportButton.type = 'button';
+            exportButton.className = 'dialog-btn secondary';
+            exportButton.textContent = '端末の元データを保存';
+            exportButton.style.marginTop = '10px';
+            exportButton.addEventListener('click', () => {
+              const raw = localStorage.getItem(STORAGE_KEY);
+              if (!raw) { showToast('この端末には保存データがありません。', 'ℹ️'); return; }
+              const url = URL.createObjectURL(new Blob([raw], { type: 'application/json' }));
+              const link = document.createElement('a');
+              link.href = url;
+              link.download = 'InkNote-local-recovery.json';
+              link.click();
+              setTimeout(() => URL.revokeObjectURL(url), 60000);
+            });
+            panel.appendChild(exportButton);
+            homeView.appendChild(panel);
+          }
+          panel.hidden = false;
+          document.getElementById('syncErrorDetail').textContent = `同期・読み込みを完了できませんでした。\n${error.message}\n既存データは削除していません。この表示をお知らせください。`;
         }
 
         function readDeletedIds(value, key) {
@@ -1394,12 +1443,7 @@
             if (!page || typeof page.id !== 'string' || !page.id || pageIds.has(page.id) ||
                 !Array.isArray(page.strokes)) throw new Error('クラウドのページ形式が不正です。');
             pageIds.add(page.id);
-            for (const stroke of page.strokes) {
-              if (!stroke || !Array.isArray(stroke.points) || !stroke.points.length ||
-                  stroke.points.some(point => !point || !Number.isFinite(point.x) || !Number.isFinite(point.y))) {
-                throw new Error('クラウドの描画データが不正です。端末のデータを保持して同期を中断しました。');
-              }
-            }
+            // 個別の破損ストロークはnormalizeStoredStrokeで保護し、他のページの読込を継続する。
           }
         }
 
@@ -1627,6 +1671,7 @@
               console.warn('Automatic Google Drive sync failed.', error);
               setCloudButtonState('☁️ 未同期・再試行');
               cloudSyncBtn.title = error.message;
+              showSyncError(error);
             });
           }, delay);
         }
@@ -1787,6 +1832,8 @@
             setCloudButtonState('✓ 同期完了');
             setTimeout(() => setCloudButtonState('☁️ Google Drive同期'), 2200);
           }
+          const errorPanel = document.getElementById('syncErrorPanel');
+          if (errorPanel) errorPanel.hidden = true;
           return true;
         }
 
@@ -1898,7 +1945,7 @@
               updatedAt: Number(n.updatedAt) || 0,
               pages: (Array.isArray(n.pages) && n.pages.length ? n.pages : [makePage()]).map(p => ({
                 id: p.id || makeId('page'),
-                strokes: Array.isArray(p.strokes) ? p.strokes : [],
+                strokes: Array.isArray(p.strokes) ? p.strokes.map(normalizeStoredStroke) : [],
                 undoStack: [],
                 redoStack: [],
                 thumbnail: typeof p.thumbnail === 'string' ? p.thumbnail : null,
@@ -1913,6 +1960,7 @@
           } catch (error) {
             libraryLoadFailed = true;
             console.warn('InkNote library could not be restored.', error);
+            showSyncError(error);
             showToast('端末データを読み込めません。上書き保存を停止し元データを保護しています。', '⚠️');
           }
         }
