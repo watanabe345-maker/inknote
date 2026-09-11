@@ -1,6 +1,6 @@
 'use strict';
 
-const CACHE_NAME = 'inknote-cache-v12';
+const CACHE_NAME = 'inknote-cache-v13';
 const CACHE_PREFIX = 'inknote-cache-';
 const APP_SHELL = [
   new URL('./', self.location.href).href,
@@ -31,8 +31,12 @@ async function networkFirst(request) {
   const cache = await caches.open(CACHE_NAME);
   try {
     const response = await fetch(request);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
     if (response && response.ok && response.type === 'basic') {
-      await cache.put(request, response.clone());
+      // クエリ付き再読み込みで同じHTMLのキャッシュを増殖させない。
+      const key = new URL(request.url);
+      key.search = '';
+      try { await cache.put(key.href, response.clone()); } catch (_) { /* 容量不足でもオンライン表示する */ }
     }
     return response;
   } catch (error) {
@@ -54,7 +58,7 @@ async function cacheFirst(request) {
 
   const response = await fetch(request);
   if (response && response.ok && response.type === 'basic') {
-    await cache.put(request, response.clone());
+    try { await cache.put(request, response.clone()); } catch (_) { /* キャッシュ失敗は表示を妨げない */ }
   }
   return response;
 }

@@ -41,7 +41,7 @@
         background-color: var(--bg-color);
         color: var(--text-primary);
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Hiragino Kaku Gothic ProN", "BIZ UDPGothic", Meiryo, sans-serif;
-        touch-action: none !important;
+        touch-action: auto;
         -webkit-touch-callout: none;
         -webkit-user-select: none;
         user-select: none;
@@ -100,7 +100,10 @@
         box-shadow: 0 4px 18px rgba(0, 0, 0, 0.07);
         max-width: 95vw;
         overflow-x: auto;
+        white-space: nowrap;
+        touch-action: pan-x;
       }
+      #topToolbar > *, #topToolbar .tool-btn, #topToolbar .color-dot, #topToolbar .width-pill { flex-shrink: 0; }
 
       .tool-btn-group {
         display: flex;
@@ -225,7 +228,7 @@
 
       #penSignalBadge {
         position: fixed;
-        top: max(72px, calc(env(safe-area-inset-top) + 62px));
+        top: max(116px, calc(env(safe-area-inset-top) + 104px));
         left: 50%;
         transform: translateX(-50%);
         z-index: 1000;
@@ -489,6 +492,7 @@
         z-index: 4;
       }
       .library-title { font-size: clamp(26px, 4vw, 42px); font-weight: 750; letter-spacing: -.04em; }
+      #homeView { touch-action: pan-y; }
       .library-subtitle { color: #a8b4bf; font-size: 13px; margin-top: 3px; }
       .phase2-btn {
         border: 1px solid rgba(255,255,255,.18);
@@ -903,7 +907,7 @@
         </div>
       </div>
 
-      <div id="penSignalBadge" role="status" aria-live="polite">入力診断 v9：端末判定中</div>
+      <div id="penSignalBadge" role="status" aria-live="polite">入力診断 v10：端末判定中</div>
 
       <!-- 2本指シミュレーター（マウスや単一ポインタ環境でテスト用） -->
       <button id="twoFingerSimToggle" title="PCマウスで「2本指タップ＋囲み選択」や「スワイプ」をテスト">
@@ -1048,12 +1052,6 @@
             y: (screenY - state.camera.y) / state.camera.zoom
           };
         }
-        function toScreen(worldX, worldY) {
-          return {
-            x: worldX * state.camera.zoom + state.camera.x,
-            y: worldY * state.camera.zoom + state.camera.y
-          };
-        }
 
         // Samsung Internet / Chrome はSペンのサイドボタンを環境によって
         // secondary button (2) または eraser button (32) として通知する。
@@ -1170,9 +1168,10 @@
         const ANDROID_PALM_CONTACT_SIZE = 36;
         const ANDROID_TOUCH_INTENT_DELAY_MS = 160;
         const ANDROID_MIN_TWO_FINGER_SPREAD = 150;
-        penSignalBadge.textContent = `入力診断 v9：パーム保護 ${USE_STRICT_PALM_GUARD ? 'ON' : 'OFF'}`;
+        penSignalBadge.textContent = `入力診断 v10：パーム保護 ${USE_STRICT_PALM_GUARD ? 'ON' : 'OFF'}`;
         let saveTimer = null;
         let storageWarningShown = false;
+        let libraryLoadFailed = false;
         const deletedNotebookIds = new Set();
         const deletedPageIds = new Set();
 
@@ -1192,6 +1191,7 @@
         let autoSyncTimer = null;
         let cloudBackupSize = null;
         let cloudArchiveSize = 0;
+        let syncRequestedAgain = false;
 
         function serializedByteSize(value) {
           return new Blob([JSON.stringify(value)]).size;
@@ -1303,6 +1303,7 @@
             console.error('Google Drive sync failed.', error);
             setCloudButtonState('☁️ 同期に失敗しました');
             cloudSyncBtn.title = error.message;
+            showToast(error.message, '⚠️');
             setTimeout(() => setCloudButtonState('☁️ Google Drive同期'), 2600);
           });
         }
@@ -1325,10 +1326,8 @@
         }
 
         function getNotebookCloudUpdatedAt(notebook) {
-          return Math.max(
-            Number(notebook.updatedAt) || 0,
-            ...notebook.pages.map(page => Number(page.updatedAt) || 0)
-          );
+          return notebook.pages.reduce((latest, page) =>
+            Math.max(latest, Number(page.updatedAt) || 0), Number(notebook.updatedAt) || 0);
         }
 
         function getNotebookCloudFileName(notebookId) {
@@ -1344,14 +1343,16 @@
             currentPageId: state.currentPageId,
             deletedNotebookIds: Array.from(deletedNotebookIds),
             deletedPageIds: Array.from(deletedPageIds),
-            notebooks: state.notebooks.map(notebook => {
-              const file = notebookFiles.get(notebook.id) || {};
+            notebooks: Array.from(notebookFiles.values()).filter(file => !deletedNotebookIds.has(file.payload.id)).map(file => {
+              // 通信中に編集されたstateではなく、実際に保存した内容から索引を作る。
+              const notebook = file.payload;
               return {
                 id: notebook.id,
                 fileId: file.id || file.fileId || null,
                 fileName: getNotebookCloudFileName(notebook.id),
                 updatedAt: getNotebookCloudUpdatedAt(notebook),
                 contentHash: serializedFingerprint(makeCloudNotebookPayload(notebook)),
+                version: file.version,
                 size: Number(file.size) || serializedByteSize(makeCloudNotebookPayload(notebook))
               };
             })
@@ -1375,7 +1376,35 @@
           };
         }
 
+        function readDeletedIds(value, key) {
+          const ids = value[key] ?? [];
+          if (!Array.isArray(ids) || ids.some(id => typeof id !== 'string' || !id)) {
+            throw new Error('クラウドの削除情報が不正です。同期を中断しました。');
+          }
+          return ids;
+        }
+
+        function validateCloudNotebook(notebook) {
+          if (!notebook || typeof notebook.id !== 'string' || !notebook.id ||
+              !Array.isArray(notebook.pages) || !notebook.pages.length) {
+            throw new Error('クラウドのノート形式が不正です。同期を中断しました。');
+          }
+          const pageIds = new Set();
+          for (const page of notebook.pages) {
+            if (!page || typeof page.id !== 'string' || !page.id || pageIds.has(page.id) ||
+                !Array.isArray(page.strokes)) throw new Error('クラウドのページ形式が不正です。');
+            pageIds.add(page.id);
+            for (const stroke of page.strokes) {
+              if (!stroke || !Array.isArray(stroke.points) || !stroke.points.length ||
+                  stroke.points.some(point => !point || !Number.isFinite(point.x) || !Number.isFinite(point.y))) {
+                throw new Error('クラウドの描画データが不正です。端末のデータを保持して同期を中断しました。');
+              }
+            }
+          }
+        }
+
         function mergeCloudNotebookIntoState(remoteValue) {
+          validateCloudNotebook(remoteValue);
           const remoteNotebook = normalizeCloudNotebook(remoteValue);
           if (deletedNotebookIds.has(remoteNotebook.id)) return null;
           remoteNotebook.pages = remoteNotebook.pages.filter(page => !deletedPageIds.has(page.id));
@@ -1441,56 +1470,13 @@
 
         function mergeCloudLibrary(remote) {
           if (!remote || !Array.isArray(remote.notebooks)) throw new Error('クラウドデータの形式が正しくありません');
-          // Drive側の「最後に開いていた位置」で、現在操作中の端末を切り替えない。
-          // 同期中にユーザーが別のノートを開いた場合も、そのローカル選択を保持する。
+          remote.notebooks.forEach(validateCloudNotebook);
           const localNotebookId = state.currentNotebookId;
           const localPageId = state.currentPageId;
-          (remote.deletedNotebookIds || []).forEach(id => deletedNotebookIds.add(id));
-          (remote.deletedPageIds || []).forEach(id => deletedPageIds.add(id));
-          const mergedNotebooks = new Map(
-            state.notebooks
-              .filter(notebook => !deletedNotebookIds.has(notebook.id))
-              .map(notebook => [notebook.id, {
-                ...notebook,
-                pages: notebook.pages.filter(page => !deletedPageIds.has(page.id))
-              }])
-          );
-          remote.notebooks.map(normalizeCloudNotebook).forEach(remoteNotebook => {
-            if (deletedNotebookIds.has(remoteNotebook.id)) return;
-            remoteNotebook.pages = remoteNotebook.pages.filter(page => !deletedPageIds.has(page.id));
-            const localNotebook = mergedNotebooks.get(remoteNotebook.id);
-            if (!localNotebook) {
-              mergedNotebooks.set(remoteNotebook.id, remoteNotebook);
-              return;
-            }
-            const mergedPages = new Map(localNotebook.pages.map(page => [page.id, page]));
-            remoteNotebook.pages.forEach(remotePage => {
-              const localPage = mergedPages.get(remotePage.id);
-              if (!localPage) {
-                mergedPages.set(remotePage.id, remotePage);
-                return;
-              }
-              const localUpdatedAt = Number(localPage.updatedAt) || 0;
-              const remoteUpdatedAt = Number(remotePage.updatedAt) || 0;
-              if (remoteUpdatedAt > localUpdatedAt ||
-                  (remoteUpdatedAt === localUpdatedAt && remotePage.strokes.length > localPage.strokes.length)) {
-                mergedPages.set(remotePage.id, remotePage);
-              }
-            });
-            const useRemoteMetadata =
-              (Number(remoteNotebook.updatedAt) || 0) > (Number(localNotebook.updatedAt) || 0);
-            const notebookMetadata = useRemoteMetadata ? remoteNotebook : localNotebook;
-            mergedNotebooks.set(remoteNotebook.id, {
-              ...notebookMetadata,
-              pages: Array.from(mergedPages.values())
-            });
-          });
-          state.notebooks = Array.from(mergedNotebooks.values());
-          const preferredNotebookId = state.notebooks.some(n => n.id === localNotebookId)
-            ? localNotebookId : remote.currentNotebookId;
-          const preferredPageId = preferredNotebookId === localNotebookId
-            ? localPageId : remote.currentPageId;
-          ensureValidLibrarySelection(preferredNotebookId, preferredPageId);
+          readDeletedIds(remote, 'deletedNotebookIds').forEach(id => deletedNotebookIds.add(id));
+          readDeletedIds(remote, 'deletedPageIds').forEach(id => deletedPageIds.add(id));
+          remote.notebooks.forEach(mergeCloudNotebookIntoState);
+          ensureValidLibrarySelection(localNotebookId, localPageId);
           saveLibraryNow();
           renderHome();
         }
@@ -1507,7 +1493,9 @@
             if (response.status === 401) googleAccessToken = null;
             let details = '';
             try { details = (await response.json())?.error?.message || ''; } catch (_) {}
-            throw new Error(details || `Google Drive API error (${response.status})`);
+            const error = new Error(details || `Google Drive API error (${response.status})`);
+            error.status = response.status;
+            throw error;
           }
           return response;
         }
@@ -1518,12 +1506,19 @@
             q: 'trashed = false',
             orderBy: 'modifiedTime desc',
             pageSize: '1000',
-            fields: 'files(id,name,modifiedTime,size,quotaBytesUsed)',
+            fields: 'nextPageToken,files(id,name,modifiedTime,size,quotaBytesUsed,version)',
             key: API_KEY
           });
-          const response = await driveFetch(`https://www.googleapis.com/drive/v3/files?${params}`);
-          const data = await response.json();
-          return (data.files || []).filter(file =>
+          const files = [];
+          let nextPageToken;
+          do {
+            if (nextPageToken) params.set('pageToken', nextPageToken);
+            const response = await driveFetch(`https://www.googleapis.com/drive/v3/files?${params}`);
+            const data = await response.json();
+            files.push(...(data.files || []));
+            nextPageToken = data.nextPageToken;
+          } while (nextPageToken);
+          return files.filter(file =>
             file.name === DRIVE_MANIFEST_FILE_NAME ||
             file.name === LEGACY_DRIVE_FILE_NAME ||
             file.name === LEGACY_ARCHIVE_FILE_NAME ||
@@ -1556,15 +1551,27 @@
           return (await response.json()).id;
         }
 
-        async function uploadCloudJson(fileId, payload) {
+        async function uploadCloudJson(fileId, payload, expectedVersion = null) {
+          const headers = { 'Content-Type': 'application/json; charset=UTF-8' };
+          if (expectedVersion) {
+            const metadataResponse = await driveFetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?fields=version&key=${encodeURIComponent(API_KEY)}`);
+            const metadata = await metadataResponse.json();
+            if (String(metadata.version) !== String(expectedVersion)) {
+              const error = new Error('別の端末で更新されました。もう一度同期してください。');
+              error.status = 412;
+              throw error;
+            }
+            const etag = metadataResponse.headers.get('ETag');
+            if (etag) headers['If-Match'] = etag;
+          }
           const params = new URLSearchParams({
             uploadType: 'media',
-            fields: 'id,name,size,quotaBytesUsed,modifiedTime',
+            fields: 'id,name,size,quotaBytesUsed,modifiedTime,version',
             key: API_KEY
           });
           const response = await driveFetch(`https://www.googleapis.com/upload/drive/v3/files/${encodeURIComponent(fileId)}?${params}`, {
             method: 'PATCH',
-            headers: { 'Content-Type': 'application/json; charset=UTF-8' },
+            headers,
             body: JSON.stringify(payload)
           });
           return response.json();
@@ -1586,10 +1593,30 @@
 
         function runGoogleDriveSync(silent = false) {
           if (!googleAccessToken) return Promise.resolve(false);
-          if (cloudSyncInFlight) return cloudSyncInFlight;
-          cloudSyncInFlight = syncWithGoogleDrive({ silent })
-            .finally(() => { cloudSyncInFlight = null; });
+          if (cloudSyncInFlight) {
+            syncRequestedAgain = true;
+            return cloudSyncInFlight;
+          }
+          cloudSyncInFlight = (async () => {
+            for (let attempt = 0; attempt < 3; attempt++) {
+              try { return await syncWithGoogleDrive({ silent }); }
+              catch (error) { if (error.status !== 412 || attempt === 2) throw error; }
+            }
+          })().finally(() => {
+            cloudSyncInFlight = null;
+            if (syncRequestedAgain) {
+              syncRequestedAgain = false;
+              scheduleAuthorizedAutoSync(350);
+            }
+          });
           return cloudSyncInFlight;
+        }
+
+        async function waitForLibrarySync() {
+          // 編集途中のストローク・選択オブジェクトを同期の差し替えから守る。
+          while (state.viewMode === 'editing') {
+            await new Promise(resolve => document.addEventListener('inknote:library-ready', resolve, { once: true }));
+          }
         }
 
         function scheduleAuthorizedAutoSync(delay = 500) {
@@ -1598,41 +1625,67 @@
           autoSyncTimer = setTimeout(() => {
             runGoogleDriveSync(true).catch(error => {
               console.warn('Automatic Google Drive sync failed.', error);
+              setCloudButtonState('☁️ 未同期・再試行');
+              cloudSyncBtn.title = error.message;
             });
           }, delay);
         }
 
         async function syncWithGoogleDrive({ silent = false } = {}) {
+          if (libraryLoadFailed) throw new Error('端末データを読み込めなかったため同期を停止しています。元データは保持しています。');
           if (!silent) setCloudButtonState('☁️ クラウドを確認中…', true);
+          await waitForLibrarySync();
           captureCurrentPageThumbnail();
-          const localNotebookId = state.currentNotebookId;
-          const localPageId = state.currentPageId;
           let cloudFiles = await listInkNoteCloudFiles();
+          const names = new Set();
+          for (const file of cloudFiles) {
+            if (Number(file.size) <= 0 || file.name === LEGACY_ARCHIVE_FILE_NAME) continue;
+            if (names.has(file.name)) throw new Error('同名のクラウドファイルが複数あります。データ保護のため同期を停止しました。');
+            names.add(file.name);
+          }
           let manifestFile = newestCloudFileNamed(cloudFiles, DRIVE_MANIFEST_FILE_NAME);
           const legacyFile = newestCloudFileNamed(cloudFiles, LEGACY_DRIVE_FILE_NAME);
           let remoteManifest = null;
           const notebooksNeedingUpload = new Set();
 
-          if (manifestFile) {
+          if (manifestFile && Number(manifestFile.size) > 0) {
             remoteManifest = await downloadCloudJson(manifestFile.id);
             if (remoteManifest?.schemaVersion !== 2 || !Array.isArray(remoteManifest.notebooks)) {
               throw new Error('クラウド索引の形式が正しくありません');
             }
-            (remoteManifest.deletedNotebookIds || []).forEach(id => deletedNotebookIds.add(id));
-            (remoteManifest.deletedPageIds || []).forEach(id => deletedPageIds.add(id));
+            await waitForLibrarySync();
+            const notebookIds = readDeletedIds(remoteManifest, 'deletedNotebookIds');
+            const pageIds = readDeletedIds(remoteManifest, 'deletedPageIds');
+            const entryIds = new Set();
+            for (const entry of remoteManifest.notebooks) {
+              if (!entry || typeof entry.id !== 'string' || !entry.id || entryIds.has(entry.id)) {
+                throw new Error('クラウド索引のノートIDが不正です。');
+              }
+              entryIds.add(entry.id);
+            }
+            notebookIds.forEach(id => deletedNotebookIds.add(id));
+            pageIds.forEach(id => deletedPageIds.add(id));
           }
 
           // 旧アプリが新しい単一バックアップを書いた場合も、一度だけ安全に取り込む。
-          const legacyIsNewer = legacyFile && (!manifestFile ||
+          const legacyIsNewer = legacyFile && (!remoteManifest ||
             Date.parse(legacyFile.modifiedTime || 0) > Date.parse(manifestFile.modifiedTime || 0));
           if (legacyIsNewer) {
-            mergeCloudLibrary(await downloadCloudJson(legacyFile.id));
+            const legacy = await downloadCloudJson(legacyFile.id);
+            await waitForLibrarySync();
+            mergeCloudLibrary(legacy);
             state.notebooks.forEach(notebook => notebooksNeedingUpload.add(notebook.id));
           }
 
           const manifestEntries = new Map(
             (remoteManifest?.notebooks || []).map(entry => [entry.id, entry])
           );
+          // 本体保存後・索引保存前に通信が途切れたノートも回収する。
+          for (const file of cloudFiles) {
+            if (!file.name.startsWith(DRIVE_NOTEBOOK_FILE_PREFIX) || !file.name.endsWith('.json') || Number(file.size) <= 0) continue;
+            const id = file.name.slice(DRIVE_NOTEBOOK_FILE_PREFIX.length, -5);
+            if (!manifestEntries.has(id)) manifestEntries.set(id, { id, fileId: file.id, fileName: file.name });
+          }
           const cloudFilesById = new Map(cloudFiles.map(file => [file.id, file]));
           const cloudFilesByName = new Map();
           cloudFiles.forEach(file => {
@@ -1647,29 +1700,34 @@
             const localContentHash = localNotebook
               ? serializedFingerprint(makeCloudNotebookPayload(localNotebook)) : null;
             const remoteUpdatedAt = Number(entry.updatedAt) || 0;
-            if (localNotebook && localUpdatedAt === remoteUpdatedAt &&
-                localContentHash === entry.contentHash && !notebooksNeedingUpload.has(entry.id)) continue;
             const remoteFile = cloudFilesById.get(entry.fileId) ||
               cloudFilesByName.get(entry.fileName || getNotebookCloudFileName(entry.id));
-            if (!remoteFile) {
-              if (localNotebook) notebooksNeedingUpload.add(entry.id);
+            if (!remoteFile || Number(remoteFile.size) === 0) {
+              if (!localNotebook) throw new Error('ノート本体が見つからないため同期を中断しました。クラウド索引は保持しています。');
+              notebooksNeedingUpload.add(entry.id);
               continue;
             }
+            if (localNotebook && localUpdatedAt === remoteUpdatedAt &&
+                localContentHash === entry.contentHash && entry.version === remoteFile.version &&
+                !notebooksNeedingUpload.has(entry.id)) continue;
             const remoteNotebook = await downloadCloudJson(remoteFile.id);
             if (remoteNotebook?.id !== entry.id) throw new Error('クラウドのノートIDが一致しません');
+            await waitForLibrarySync();
             mergeCloudNotebookIntoState(remoteNotebook);
-            // ローカルとリモートの差分を統合したため、このノートだけ書き戻す。
-            notebooksNeedingUpload.add(entry.id);
+            // 取得だけで一致したノートはアップロードしない。
+            entry.contentHash = serializedFingerprint(makeCloudNotebookPayload(remoteNotebook));
+            entry.updatedAt = getNotebookCloudUpdatedAt(remoteNotebook);
+            entry.version = remoteFile.version;
           }
 
-          const preferredNotebookId = state.notebooks.some(notebook => notebook.id === localNotebookId)
-            ? localNotebookId : remoteManifest?.currentNotebookId;
-          const preferredPageId = preferredNotebookId === localNotebookId
-            ? localPageId : remoteManifest?.currentPageId;
-          ensureValidLibrarySelection(preferredNotebookId, preferredPageId);
+          await waitForLibrarySync();
+          ensureValidLibrarySelection(state.currentNotebookId, state.currentPageId);
+          saveLibraryNow();
+          if (state.viewMode === 'notebook') renderNotebook();
 
           const notebookFiles = new Map();
-          for (const notebook of state.notebooks) {
+          const snapshot = JSON.parse(JSON.stringify(state.notebooks.map(makeCloudNotebookPayload)));
+          for (const notebook of snapshot) {
             if (deletedNotebookIds.has(notebook.id)) continue;
             const entry = manifestEntries.get(notebook.id);
             const fileName = getNotebookCloudFileName(notebook.id);
@@ -1682,29 +1740,33 @@
               notebooksNeedingUpload.has(notebook.id);
             if (needsUpload) {
               const fileId = notebookFile?.id || await createCloudJsonFile(fileName);
-              const uploaded = await uploadCloudJson(fileId, makeCloudNotebookPayload(notebook));
+              const uploaded = await uploadCloudJson(fileId, makeCloudNotebookPayload(notebook), notebookFile?.version);
               notebookFile = { ...notebookFile, ...uploaded, id: fileId, name: fileName };
             }
             notebookFiles.set(notebook.id, {
               ...notebookFile,
               id: notebookFile.id,
+              payload: notebook,
               size: Number(notebookFile.size) || serializedByteSize(makeCloudNotebookPayload(notebook))
             });
-          }
-
-          // 削除済みノートの本体ファイルは、索引の墓石情報を残した上で除去する。
-          for (const notebookId of deletedNotebookIds) {
-            const entry = manifestEntries.get(notebookId);
-            const file = cloudFilesById.get(entry?.fileId) ||
-              cloudFilesByName.get(entry?.fileName || getNotebookCloudFileName(notebookId));
-            if (file) await deleteCloudFile(file.id);
           }
 
           const manifestPayload = makeCloudManifest(notebookFiles);
           if (!manifestFile) {
             manifestFile = { id: await createCloudJsonFile(DRIVE_MANIFEST_FILE_NAME) };
           }
-          await uploadCloudJson(manifestFile.id, manifestPayload);
+          await uploadCloudJson(manifestFile.id, manifestPayload, manifestFile.version);
+
+          // 削除情報の保存成功後に限り本体を削除。失敗時も次回の同期で再試行できる。
+          for (const notebookId of manifestPayload.deletedNotebookIds) {
+            const entry = manifestEntries.get(notebookId);
+            const file = cloudFilesById.get(entry?.fileId) ||
+              cloudFilesByName.get(entry?.fileName || getNotebookCloudFileName(notebookId));
+            if (file) {
+              try { await deleteCloudFile(file.id); }
+              catch (error) { if (error.status !== 404) console.warn('Deleted notebook cleanup deferred.', error); }
+            }
+          }
 
           // appDataFolderはゴミ箱非対応のため、移行成功後の旧データは通信対象外の名前で安全に退避する。
           if (legacyFile) await renameCloudFile(legacyFile.id, LEGACY_ARCHIVE_FILE_NAME);
@@ -1716,6 +1778,11 @@
           updateCloudStorageSummary(getCloudFilesTotalSize(cloudFiles), archivedBytes);
           saveLibraryNow();
           renderHome();
+          const savedHashes = new Map(manifestPayload.notebooks.map(entry => [entry.id, entry.contentHash]));
+          if (state.notebooks.some(notebook =>
+              savedHashes.get(notebook.id) !== serializedFingerprint(makeCloudNotebookPayload(notebook)))) {
+            syncRequestedAgain = true;
+          }
           if (!silent) {
             setCloudButtonState('✓ 同期完了');
             setTimeout(() => setCloudButtonState('☁️ Google Drive同期'), 2200);
@@ -1764,13 +1831,14 @@
         async function initializePwa() {
           try {
             const [icon192, icon512] = await Promise.all([createPwaIcon(192), createPwaIcon(512)]);
+            const appUrl = new URL('./index.html', location.href).href;
             const manifest = {
-              id: './index.html',
+              id: appUrl,
               name: 'InkNote 手書きノート',
               short_name: 'InkNote',
               description: '手書きジェスチャー対応のノートアプリ',
-              start_url: './index.html',
-              scope: './',
+              start_url: appUrl,
+              scope: new URL('./', location.href).href,
               display: 'standalone',
               orientation: 'any',
               background_color: '#17232d',
@@ -1816,7 +1884,10 @@
             const raw = localStorage.getItem(STORAGE_KEY);
             if (!raw) return;
             const parsed = JSON.parse(raw);
-            if (!Array.isArray(parsed.notebooks) || parsed.notebooks.length === 0) return;
+            if (!Array.isArray(parsed.notebooks) || parsed.notebooks.length === 0) throw new Error('Invalid local library');
+            parsed.notebooks.forEach(validateCloudNotebook);
+            readDeletedIds(parsed, 'deletedNotebookIds');
+            readDeletedIds(parsed, 'deletedPageIds');
             state.returnToPenAfterErase = parsed.returnToPenAfterErase !== false;
             (parsed.deletedNotebookIds || []).forEach(id => deletedNotebookIds.add(id));
             (parsed.deletedPageIds || []).forEach(id => deletedPageIds.add(id));
@@ -1840,11 +1911,14 @@
             state.currentPageId = notebook.pages.some(p => p.id === parsed.currentPageId)
               ? parsed.currentPageId : notebook.pages[0].id;
           } catch (error) {
+            libraryLoadFailed = true;
             console.warn('InkNote library could not be restored.', error);
+            showToast('端末データを読み込めません。上書き保存を停止し元データを保護しています。', '⚠️');
           }
         }
 
         function saveLibraryNow() {
+          if (libraryLoadFailed) return;
           clearTimeout(saveTimer);
           saveTimer = null;
           const makeSerializableLibrary = includeThumbnails => ({
@@ -1890,7 +1964,7 @@
         }
 
         function markCurrentPageUpdated() {
-          if (state.currentPage) state.currentPage.updatedAt = Date.now();
+          if (state.currentPage) state.currentPage.updatedAt = Math.max(Date.now(), (Number(state.currentPage.updatedAt) || 0) + 1);
         }
 
         function captureCurrentPageThumbnail() {
@@ -1941,12 +2015,19 @@
           state.activePenId = null;
           state.currentPenPoints = [];
           state.currentMode = 'idle';
+          state.twoFingerCancelTime = 0;
+          state.swipeTriggered = false;
+          state.twoFingerStartCenter = null;
+          state.stylusInProximity = false;
+          state.dragOriginalPositions = null;
           state.selectedStrokeIds.clear();
           state.camera = { x: 0, y: 0, zoom: 1 };
           updateSelectionUI();
         }
 
         function setViewMode(mode, options = {}) {
+          clearTimeout(pageFlingTimer);
+          pageDrag = null;
           if (state.viewMode === 'editing' && mode !== 'editing' && !options.skipCapture) captureCurrentPageThumbnail();
           state.viewMode = mode;
           homeView.hidden = mode !== 'home';
@@ -1963,6 +2044,7 @@
             requestAnimationFrame(() => { resizeCanvas(); redrawInkCanvas(); renderOverlay(); });
           }
           scheduleLibrarySave();
+          if (mode !== 'editing') document.dispatchEvent(new Event('inknote:library-ready'));
         }
 
         function renderHome() {
@@ -2033,6 +2115,7 @@
         }
 
         function renderNotebook() {
+          clearTimeout(pageFlingTimer);
           const notebook = state.currentNotebook;
           if (!notebook) { setViewMode('home'); return; }
           state.activePageIndex = Math.max(0, Math.min(state.activePageIndex, notebook.pages.length - 1));
@@ -2291,21 +2374,6 @@
         }
 
         // 点がストロークにヒットしているか
-        function isPointNearStroke(p, stroke, tolerance = 10) {
-          if (!stroke.bbox) stroke.bbox = calculateBBox(stroke.points);
-          if (p.x < stroke.bbox.minX - tolerance || p.x > stroke.bbox.maxX + tolerance ||
-              p.y < stroke.bbox.minY - tolerance || p.y > stroke.bbox.maxY + tolerance) {
-            return false;
-          }
-          const tol2 = (tolerance + stroke.width) ** 2;
-          const pts = stroke.points;
-          for (let i = 0; i < pts.length - 1; i++) {
-            if (distToSegmentSquared(p, pts[i], pts[i+1]) <= tol2) {
-              return true;
-            }
-          }
-          return false;
-        }
 
         function getSelectionBBox() {
           if (state.selectedStrokeIds.size === 0) return null;
@@ -2599,14 +2667,14 @@
             ctx.lineWidth = Math.max(stroke.width * 2 + 4, 8);
             ctx.globalAlpha = 0.55;
             ctx.beginPath();
-            drawStrokePath(ctx, pts);
+            drawStrokePath(ctx, pts, Boolean(stroke.shapeType));
             ctx.stroke();
 
             ctx.strokeStyle = '#0284c7';
             ctx.lineWidth = stroke.width + 1.5;
             ctx.globalAlpha = 0.9;
             ctx.beginPath();
-            drawStrokePath(ctx, pts);
+            drawStrokePath(ctx, pts, Boolean(stroke.shapeType));
             ctx.stroke();
           } else {
             ctx.strokeStyle = stroke.color;
@@ -2629,19 +2697,24 @@
               // 均一線幅描画
               ctx.lineWidth = stroke.width;
               ctx.beginPath();
-              drawStrokePath(ctx, pts);
+              drawStrokePath(ctx, pts, Boolean(stroke.shapeType));
               ctx.stroke();
             }
           }
           ctx.restore();
         }
 
-        function drawStrokePath(ctx, pts) {
+        function drawStrokePath(ctx, pts, straight = false) {
+          if (!pts.length) return;
           if (pts.length < 2) {
             ctx.arc(pts[0].x, pts[0].y, 1.5, 0, Math.PI * 2);
             return;
           }
           ctx.moveTo(pts[0].x, pts[0].y);
+          if (straight) {
+            for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+            return;
+          }
           if (pts.length === 2) {
             ctx.lineTo(pts[1].x, pts[1].y);
             return;
@@ -2655,7 +2728,7 @@
         }
 
         // インクキャンバスの全ストローク再描画
-                        function redrawInkCanvas() {
+        function redrawInkCanvas() {
           inkCtx.save();
           inkCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
           inkCtx.clearRect(0, 0, inkCanvas.width, inkCanvas.height);
@@ -3320,6 +3393,8 @@
 
         function handlePointerMove(e) {
           if (state.viewMode !== 'editing') return;
+          if (state.activePenId === null && !state.activeTouches.has(e.pointerId) &&
+              e.target.closest?.('#topToolbar, button, input')) return;
           e.preventDefault();
           if (e.pointerType === 'touch' && state.rejectedTouchIds.has(e.pointerId)) return;
           if (e.pointerType === 'pen') {
@@ -3607,6 +3682,8 @@
 
         function handlePointerUp(e) {
           if (state.viewMode !== 'editing') return;
+          if (state.activePenId !== e.pointerId && !state.activeTouches.has(e.pointerId) &&
+              !state.rejectedTouchIds.has(e.pointerId)) return;
           e.preventDefault();
 
           if (e.pointerType === 'touch' && state.rejectedTouchIds.delete(e.pointerId)) return;
@@ -3921,6 +3998,7 @@
           const target = Math.max(0, Math.min(targetIndex, notebook.pages.length - 1));
           clearTimeout(pageFlingTimer);
           const advance = () => {
+            if (state.viewMode !== 'notebook' || state.currentNotebookId !== notebook.id) return;
             if (state.activePageIndex === target) return;
             selectPage(state.activePageIndex + Math.sign(target - state.activePageIndex));
             pageFlingTimer = setTimeout(advance, 68);
@@ -3929,6 +4007,7 @@
         }
 
         pageStage.addEventListener('pointerdown', (event) => {
+          if (pageDrag) return;
           if (event.pointerType === 'mouse' && event.button !== 0) return;
           event.preventDefault();
           clearTimeout(pageFlingTimer);
@@ -3974,7 +4053,11 @@
           }
         };
         pageStage.addEventListener('pointerup', finishPageDrag);
-        pageStage.addEventListener('pointercancel', () => { pageDrag = null; updatePageTransforms(0); });
+        pageStage.addEventListener('pointercancel', event => {
+          if (pageDrag?.id !== event.pointerId) return;
+          pageDrag = null;
+          updatePageTransforms(0);
+        });
 
         // ペン種別ピッカー
         document.querySelectorAll('#penTypeGroup .width-pill').forEach(btn => {
@@ -4026,6 +4109,7 @@
         pressureToggle.addEventListener('click', () => {
           state.usePressure = !state.usePressure;
           pressureToggle.classList.toggle('active', state.usePressure);
+          redrawInkCanvas();
           showToast(`筆圧感知: ${state.usePressure ? 'ON (有効)' : 'OFF (無効)'}`, '🖊️');
         });
 
@@ -4163,14 +4247,16 @@
         // キーボードショートカット（Undo: Cmd/Ctrl+Z, Redo: Cmd/Ctrl+Shift+Z or Ctrl+Y）
         window.addEventListener('keydown', (e) => {
           if (state.viewMode !== 'editing') return;
-          if ((e.metaKey || e.ctrlKey) && e.key === 'z') {
+          if (e.target?.closest?.('input, textarea, [contenteditable="true"]')) return;
+          const key = e.key.toLowerCase();
+          if ((e.metaKey || e.ctrlKey) && key === 'z') {
             e.preventDefault();
             if (e.shiftKey) {
               redo();
             } else {
               undo();
             }
-          } else if ((e.metaKey || e.ctrlKey) && e.key === 'y') {
+          } else if ((e.metaKey || e.ctrlKey) && key === 'y') {
             e.preventDefault();
             redo();
           } else if (e.key === 'Delete' || e.key === 'Backspace') {
@@ -4191,6 +4277,9 @@
         window.addEventListener('pagehide', () => {
           if (state.viewMode === 'editing') captureCurrentPageThumbnail();
           saveLibraryNow();
+        });
+        document.addEventListener('visibilitychange', () => {
+          if (document.visibilityState === 'hidden') saveLibraryNow();
         });
 
       })();
